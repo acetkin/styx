@@ -94,6 +94,43 @@ class Envelope(BaseModel, Generic[T]):
     errors: list[ErrorItem] = Field(default_factory=list)
 
 
+DEFAULT_ORB_ASPECTS: dict[str, float] = {
+    "conjunction": 8,
+    "opposition": 8,
+    "trine": 7,
+    "square": 7,
+    "sextile": 5,
+}
+DEFAULT_ORB_POLICY = "default_v1"
+DEFAULT_LUMINARY_BONUS = 2.0
+DEFAULT_COORD_FRAME = "ecliptic"
+DEFAULT_COORD_UNIT = "deg"
+DEFAULT_ZODIAC_TYPE = "tropical"
+DEFAULT_HOUSE_SYSTEM = "placidus"
+
+
+def default_settings() -> Settings:
+    return Settings(
+        zodiac=ZodiacSettings(type=DEFAULT_ZODIAC_TYPE),
+        house_system=DEFAULT_HOUSE_SYSTEM,
+        coordinates=CoordinatesSettings(frame=DEFAULT_COORD_FRAME, unit=DEFAULT_COORD_UNIT),
+        orbs=OrbsSettings(
+            policy=DEFAULT_ORB_POLICY,
+            aspects=DEFAULT_ORB_ASPECTS,
+            luminary_bonus=DEFAULT_LUMINARY_BONUS,
+        ),
+    )
+
+
+def default_input_summary() -> InputSummary:
+    return InputSummary(
+        datetime_local=None,
+        timezone=None,
+        datetime_utc=None,
+        location=LocationSummary(lat=None, lon=None),
+    )
+
+
 def build_envelope(
     *,
     data: Any = None,
@@ -152,10 +189,12 @@ def envelope_response(
 ) -> JSONResponse:
     req_id = _resolve_request_id(request)
     timing_obj = timing or _resolve_timing(request)
+    settings_obj = settings or default_settings()
+    input_summary_obj = input_summary or default_input_summary()
     envelope = build_envelope(
         data=data,
-        settings=settings,
-        input_summary=input_summary,
+        settings=settings_obj,
+        input_summary=input_summary_obj,
         request_id=req_id,
         timing=timing_obj,
         errors=errors or [],
