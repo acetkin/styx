@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 
 from app.config import (
     ASTEROID_ORDER,
@@ -16,6 +17,10 @@ from app.config import (
     TRANSIT_ORB_TABLE,
 )
 from app.models import ChartRequest, LocationObj, Settings, TransitRequest, TimelineRequest, ProgressionTimelineRequest
+from app.core.envelope import Settings as EnvelopeSettings
+from app.core.envelope import ZodiacSettings, envelope_response
+from app.core.errors import http_exception_handler, unhandled_exception_handler, validation_exception_handler
+from app.core.middleware import request_id_middleware, timing_middleware
 from app.services.lunations import filter_lunations
 from app.services.astro import (
     _build_aspect_targets,
@@ -33,11 +38,25 @@ from app.services.timeline import build_timeline
 from app.services.progression_timeline import build_progression_timeline
 
 app = FastAPI(title="STYX API", version="0.1.0")
+app.middleware("http")(request_id_middleware)
+app.middleware("http")(timing_middleware)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(Exception, unhandled_exception_handler)
 
 
 @app.get("/v1/health")
-def health() -> dict:
-    return {"status": "ok"}
+def health(request: Request):
+    settings = EnvelopeSettings(
+        zodiac=ZodiacSettings(type=DEFAULT_ZODIAC),
+        house_system=DEFAULT_HOUSE_SYSTEM,
+    )
+    return envelope_response(
+        request=request,
+        data={"status": "ok"},
+        settings=settings,
+        input_summary=None,
+    )
 
 
 @app.get("/v1/config")
