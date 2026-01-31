@@ -17,8 +17,15 @@ from app.config import (
     TRANSIT_ORB_TABLE,
 )
 from app.models import ChartRequest, LocationObj, Settings, TransitRequest, TimelineRequest, ProgressionTimelineRequest
-from app.core.envelope import Settings as EnvelopeSettings
-from app.core.envelope import ZodiacSettings, envelope_response
+from app.core.envelope import (
+    CoordinatesSettings,
+    InputSummary,
+    LocationSummary,
+    OrbsSettings,
+    Settings as EnvelopeSettings,
+    ZodiacSettings,
+    envelope_response,
+)
 from app.core.errors import http_exception_handler, unhandled_exception_handler, validation_exception_handler
 from app.core.middleware import request_id_middleware, timing_middleware
 from app.services.lunations import filter_lunations
@@ -44,24 +51,62 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
+DEFAULT_ORB_ASPECTS = {
+    "conjunction": 8,
+    "opposition": 8,
+    "trine": 7,
+    "square": 7,
+    "sextile": 5,
+}
+DEFAULT_ORB_POLICY = "default_v1"
+DEFAULT_LUMINARY_BONUS = 2.0
+
+
+def _build_envelope_settings(settings: Settings | None) -> EnvelopeSettings:
+    resolved = settings or Settings()
+    return EnvelopeSettings(
+        zodiac=ZodiacSettings(type=resolved.zodiac or DEFAULT_ZODIAC),
+        house_system=resolved.house_system or DEFAULT_HOUSE_SYSTEM,
+        coordinates=CoordinatesSettings(
+            frame=resolved.coordinate_system or DEFAULT_COORDINATE_SYSTEM,
+            unit="deg",
+        ),
+        orbs=OrbsSettings(
+            policy=DEFAULT_ORB_POLICY,
+            aspects=DEFAULT_ORB_ASPECTS,
+            luminary_bonus=DEFAULT_LUMINARY_BONUS,
+        ),
+    )
+
+
+def _build_input_summary(timestamp_utc: str | None, location: dict | None) -> InputSummary:
+    loc = LocationSummary(
+        lat=location.get("lat") if location else None,
+        lon=location.get("lon") if location else None,
+    )
+    tz = "UTC" if timestamp_utc else None
+    return InputSummary(
+        datetime_local=timestamp_utc,
+        timezone=tz,
+        datetime_utc=timestamp_utc,
+        location=loc,
+    )
+
 
 @app.get("/v1/health")
 def health(request: Request):
-    settings = EnvelopeSettings(
-        zodiac=ZodiacSettings(type=DEFAULT_ZODIAC),
-        house_system=DEFAULT_HOUSE_SYSTEM,
-    )
+    settings = _build_envelope_settings(None)
     return envelope_response(
         request=request,
         data={"status": "ok"},
         settings=settings,
-        input_summary=None,
+        input_summary=_build_input_summary(None, None),
     )
 
 
 @app.get("/v1/config")
-def config() -> dict:
-    return {
+def config(request: Request):
+    payload = {
         "defaults": {
             "house_system": DEFAULT_HOUSE_SYSTEM,
             "zodiac": DEFAULT_ZODIAC,
@@ -81,6 +126,12 @@ def config() -> dict:
         "transit_orbs": TRANSIT_ORB_TABLE,
         "provenance": get_provenance(),
     }
+    return envelope_response(
+        request=request,
+        data=payload,
+        settings=_build_envelope_settings(None),
+        input_summary=_build_input_summary(None, None),
+    )
 
 
 def _resolve_timestamp(raw: str | None) -> str:
@@ -180,7 +231,12 @@ def chart(req: ChartRequest, request: Request) -> dict:
     base_meta = dict(payload["meta"])
     base_meta.pop("name", None)
     payload["meta"] = {"name": name, **base_meta}
-    return payload
+    return envelope_response(
+        request=request,
+        data=payload,
+        settings=_build_envelope_settings(settings),
+        input_summary=_build_input_summary(timestamp_utc, location),
+    )
 
 
 def _label_from_frame(frame: ChartRequest) -> str:
@@ -191,6 +247,14 @@ def _label_from_frame(frame: ChartRequest) -> str:
 @app.post("/v1/transit")
 def transit(req: TransitRequest, request: Request) -> dict:
     transit_type = req.metadata.transit_type
+
+    def _wrap(payload: dict, timestamp_utc: str | None, location: dict | None, settings: Settings | None):
+        return envelope_response(
+            request=request,
+            data=payload,
+            settings=_build_envelope_settings(settings),
+            input_summary=_build_input_summary(timestamp_utc, location),
+        )
 
     if transit_type == "lunations":
         if not req.metadata.start_utc or not req.metadata.end_utc:
@@ -211,7 +275,7 @@ def transit(req: TransitRequest, request: Request) -> dict:
             },
             "events": events,
         }
-        return payload
+        return _wrap(payload, req.metadata.start_utc, None, None)
 
     if transit_type not in {"transit", "on_natal", "synastry", "astrocartography", "solar_arc", "secondary_progression"}:
         raise HTTPException(status_code=422, detail=f"Unsupported transit_type: {transit_type}")
@@ -252,7 +316,8 @@ def transit(req: TransitRequest, request: Request) -> dict:
             "results": astro_payload["results"],
             "crossings": astro_payload["crossings"],
         }
-        return round_payload(payload, 2)
+        payload = round_payload(payload, 2)
+        return _wrap(payload, frame_a_chart["meta"]["timestamp_utc"], frame_a_chart["meta"]["location"], settings)
 
     if frame_b_req is None:
         if transit_type == "synastry":
@@ -319,7 +384,8 @@ def transit(req: TransitRequest, request: Request) -> dict:
             },
             "aspects": aspects,
         }
-        return round_payload(payload, 2)
+        payload = round_payload(payload, 2)
+        return _wrap(payload, frame_b_chart["meta"]["timestamp_utc"], frame_b_chart["meta"]["location"], frame_b_req.settings)
 
     if transit_type == "secondary_progression":
         try:
@@ -353,7 +419,8 @@ def transit(req: TransitRequest, request: Request) -> dict:
             meta["transit_type"] = transit_type
             meta["target_timestamp_utc"] = frame_b_chart["meta"]["timestamp_utc"]
             progressed_chart["meta"] = meta
-            return round_payload(progressed_chart, 2)
+            payload = round_payload(progressed_chart, 2)
+            return _wrap(payload, frame_b_chart["meta"]["timestamp_utc"], frame_b_chart["meta"]["location"], frame_b_req.settings)
 
         aspect_set, aspect_angles, aspect_orbs, aspect_classes = _default_aspect_config()
         targets_a = _build_aspect_targets(progressed_chart)
@@ -375,7 +442,8 @@ def transit(req: TransitRequest, request: Request) -> dict:
             },
             "aspects": aspects,
         }
-        return round_payload(payload, 2)
+        payload = round_payload(payload, 2)
+        return _wrap(payload, frame_b_chart["meta"]["timestamp_utc"], frame_b_chart["meta"]["location"], frame_b_req.settings)
 
     try:
         frame_a_chart = _resolve_frame(frame_a_req)
@@ -421,7 +489,8 @@ def transit(req: TransitRequest, request: Request) -> dict:
         "aspects": aspects,
     }
 
-    return round_payload(payload, 2)
+    payload = round_payload(payload, 2)
+    return _wrap(payload, frame_b_chart["meta"]["timestamp_utc"], frame_b_chart["meta"]["location"], frame_b_req.settings)
 
 
 @app.post("/v1/timeline")
@@ -429,6 +498,7 @@ def timeline(req: TimelineRequest, request: Request) -> dict:
     settings = req.settings or req.natal.settings or Settings()
     natal_location = _resolve_location(req.natal.metadata.location, request)
     natal_timestamp = _resolve_timestamp(req.natal.metadata.timestamp_utc)
+    input_summary = _build_input_summary(natal_timestamp, natal_location)
 
     level = req.metadata.level
     body = (req.metadata.body or "").strip().lower() or None
@@ -444,14 +514,19 @@ def timeline(req: TimelineRequest, request: Request) -> dict:
             end_utc=req.metadata.end_utc,
             lunation_type=lunation_type,
         )
-        return {
-            "meta": {
-                "start_utc": req.metadata.start_utc,
-                "end_utc": req.metadata.end_utc,
-                "level": level,
+        return envelope_response(
+            request=request,
+            data={
+                "meta": {
+                    "start_utc": req.metadata.start_utc,
+                    "end_utc": req.metadata.end_utc,
+                    "level": level,
+                },
+                "events": events,
             },
-            "events": events,
-        }
+            settings=_build_envelope_settings(settings),
+            input_summary=input_summary,
+        )
 
     try:
         natal_chart = calc_chart(
@@ -485,7 +560,12 @@ def timeline(req: TimelineRequest, request: Request) -> dict:
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return payload
+    return envelope_response(
+        request=request,
+        data=payload,
+        settings=_build_envelope_settings(settings),
+        input_summary=input_summary,
+    )
 
 
 @app.post("/v1/progression_timeline")
@@ -493,6 +573,7 @@ def progression_timeline(req: ProgressionTimelineRequest, request: Request) -> d
     settings = req.settings or req.natal.settings or Settings()
     natal_location = _resolve_location(req.natal.metadata.location, request)
     natal_timestamp = _resolve_timestamp(req.natal.metadata.timestamp_utc)
+    input_summary = _build_input_summary(natal_timestamp, natal_location)
 
     try:
         natal_chart = calc_chart(
@@ -511,4 +592,9 @@ def progression_timeline(req: ProgressionTimelineRequest, request: Request) -> d
         end_utc=req.metadata.end_utc,
         step_years=req.metadata.step_years or 1,
     )
-    return payload
+    return envelope_response(
+        request=request,
+        data=payload,
+        settings=_build_envelope_settings(settings),
+        input_summary=input_summary,
+    )
