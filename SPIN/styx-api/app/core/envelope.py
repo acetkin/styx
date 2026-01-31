@@ -177,12 +177,15 @@ def _resolve_timing(request: Request) -> Timing:
     return Timing(latency_ms=elapsed_ms, compute_ms=elapsed_ms, cache=CacheInfo(hit=False))
 
 
+_MISSING = object()
+
+
 def envelope_response(
     *,
     request: Request,
     data: Any = None,
     settings: Settings | None = None,
-    input_summary: InputSummary | None = None,
+    input_summary: InputSummary | None | object = _MISSING,
     errors: list[ErrorItem] | None = None,
     timing: Timing | None = None,
     status_code: int = 200,
@@ -190,7 +193,10 @@ def envelope_response(
     req_id = _resolve_request_id(request)
     timing_obj = timing or _resolve_timing(request)
     settings_obj = settings or default_settings()
-    input_summary_obj = input_summary or default_input_summary()
+    if input_summary is _MISSING:
+        input_summary_obj = default_input_summary()
+    else:
+        input_summary_obj = input_summary
     envelope = build_envelope(
         data=data,
         settings=settings_obj,

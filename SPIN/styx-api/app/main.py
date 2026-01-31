@@ -100,7 +100,7 @@ def health(request: Request):
         request=request,
         data={"status": "ok"},
         settings=settings,
-        input_summary=_build_input_summary(None, None),
+        input_summary=None,
     )
 
 
@@ -130,7 +130,7 @@ def config(request: Request):
         request=request,
         data=payload,
         settings=_build_envelope_settings(None),
-        input_summary=_build_input_summary(None, None),
+        input_summary=None,
     )
 
 
