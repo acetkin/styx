@@ -84,6 +84,28 @@ In this system, do not introduce ad-hoc standalone decision/history log files; t
 - `SPEC/` holds process rules and planning documents.
 - `SPIN/` holds produced outputs and working artifacts.
 
+### Repository Root Layout Rules
+
+- Repo root MUST contain:
+  - `SEED/`
+  - `SPEC/`
+  - `SPIN/`
+  - GitHub-required infra at root (do not move under `SPIN/`):
+    - `.github/`
+    - `.gitignore`
+    - `.gitattributes`
+- Docs location rule:
+  - Project documentation lives under `SPIN/docs/`.
+  - If `docs/` exists at root, move it to `SPIN/docs/`.
+- Logging rule:
+  - Operational logs and generated samples go under `SPIN/_logs/`.
+  - Example: `SPIN/_logs/repo_reorg/<timestamp>/...`
+
+**Rationale**
+
+- `.github/` must stay at repo root for GitHub Actions/workflows to run reliably.
+- Keeping `SEED/`, `SPEC/`, and `SPIN/` at root keeps navigation stable; keeping docs/logs under `SPIN/` keeps the root clean.
+
 ### Fixed SPEC Folder Structure
 
 - `SPEC/` is fixed and predictable to support reliable LLM navigation and updates.
