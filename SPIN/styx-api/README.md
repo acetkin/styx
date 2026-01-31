@@ -11,6 +11,16 @@ pip install -e .
 uvicorn app.main:app --reload
 ```
 
+## Smoke Run (local samples)
+
+```bash
+python SPIN/styx-api/scripts/smoke_run_api.py
+```
+
+This starts the API locally, calls key `/v1/*` endpoints, validates the Envelope shape, and writes JSON samples to:
+
+- `SPIN/_logs/samples/<YYYY-MM-DD_HHMMSS>/`
+
 ## Environment
 
 - `SE_EPHE_PATH` : Path to Swiss Ephemeris files.
