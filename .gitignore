@@ -15,7 +15,9 @@
 
 # Local artifacts
 SPIN/_local/
-SPIN/_logs/
+SPIN/_logs/*
+!SPIN/_logs/repo_reorg/
+!SPIN/_logs/repo_reorg/**
 
 # OS / editor
 .DS_Store
