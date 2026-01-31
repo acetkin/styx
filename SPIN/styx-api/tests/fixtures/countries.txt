@@ -1,0 +1,2 @@
+TR	TR	792	TU	Turkey	Ankara	0	0	EU	.tr	TRY	Turkish Lira	90			tr	298795
+CI	CI	384	IV	Cote d'Ivoire	Yamoussoukro	0	0	AF	.ci	XOF	Franc	225			fr	2287781

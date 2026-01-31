@@ -1,0 +1,23 @@
+# Python
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.venv/
+**/.venv/
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Local artifacts
+SPIN/_local/
+SPIN/_logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/

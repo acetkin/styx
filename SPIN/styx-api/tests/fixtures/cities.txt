@@ -1,0 +1,3 @@
+745044	Istanbul	Istanbul	Istanbul	41.01384	28.94966	P	PPL	TR		34		0	0	15462452	Europe/Istanbul	2024-01-01
+323786	Ankara	Ankara	Ankara	39.91987	32.85427	P	PPLC	TR		68		0	0	5503985	Europe/Istanbul	2024-01-01
+749748	Zonguldak	Zonguldak	Zonguldak	41.45139	31.79305	P	PPLA	TR		14		0	0	112291	Europe/Istanbul	2024-01-01
