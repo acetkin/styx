@@ -303,19 +303,10 @@ def _resolve_chart_frame(frame: ChartRequest, request: Request, *, allow_derived
     return payload, timestamp_utc, location, settings
 
 
-def _resolved_name(req: ChartRequest) -> str | None:
-    return (
-        req.metadata.name
-        or (req.subject.name if req.subject else None)
-        or (req.frame_a.metadata.name if req.frame_a else None)
-        or (req.frame_a.subject.name if req.frame_a and req.frame_a.subject else None)
-    )
-
-
 @app.post("/v1/chart")
 def chart(req: ChartRequest, request: Request) -> dict:
     chart_type = req.metadata.chart_type
-    name = _resolved_name(req)
+    name = None
 
     if chart_type in {"natal", "moment"}:
         settings = req.settings or Settings()
@@ -531,11 +522,6 @@ def transit(req: TransitRequest, request: Request) -> dict:
             )
 
     if transit_type == "solar_arc":
-        if req.metadata.output and req.metadata.output != "aspects":
-            raise HTTPException(
-                status_code=422,
-                detail="solar_arc chart output moved to /v1/chart with chart_type=solar_arc",
-            )
         try:
             frame_a_chart = _resolve_frame(frame_a_req)
             frame_b_chart = _resolve_frame(frame_b_req)
@@ -581,11 +567,6 @@ def transit(req: TransitRequest, request: Request) -> dict:
         return _wrap(payload, frame_b_chart["meta"]["timestamp_utc"], frame_b_chart["meta"]["location"], frame_b_req.settings)
 
     if transit_type == "secondary_progression":
-        if req.metadata.output and req.metadata.output != "aspects":
-            raise HTTPException(
-                status_code=422,
-                detail="secondary_progression chart output moved to /v1/chart with chart_type=secondary_progression",
-            )
         try:
             frame_a_chart = _resolve_frame(frame_a_req)
             frame_b_chart = _resolve_frame(frame_b_req)
@@ -665,8 +646,6 @@ def transit(req: TransitRequest, request: Request) -> dict:
         prefix_b,
     )
 
-    name_a = frame_a_req.metadata.name or (frame_a_req.subject.name if frame_a_req.subject else None)
-    name_b = frame_b_req.metadata.name or (frame_b_req.subject.name if frame_b_req.subject else None)
     meta = {
         "transit_type": transit_type,
         "timestamp_utc": frame_b_chart["meta"]["timestamp_utc"],

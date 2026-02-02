@@ -18,7 +18,7 @@ from app.config import (
 from app.main import app
 
 
-def _client(monkeypatch: object) -> TestClient:
+def _client(monkeypatch: object, *, raise_server_exceptions: bool = True) -> TestClient:
     ephe_path = Path(__file__).resolve().parents[1] / "ephe"
     if ephe_path.exists():
         monkeypatch.setenv("SE_EPHE_PATH", str(ephe_path))
@@ -30,7 +30,7 @@ def _client(monkeypatch: object) -> TestClient:
     countries_path = Path(__file__).resolve().parent / "fixtures" / "countries.txt"
     if countries_path.exists():
         monkeypatch.setenv("STYX_COUNTRIES_PATH", str(countries_path))
-    return TestClient(app)
+    return TestClient(app, raise_server_exceptions=raise_server_exceptions)
 
 
 def _measure(client: TestClient, method: str, url: str, **kwargs) -> tuple[float, object]:
@@ -57,11 +57,42 @@ def _write_latency_log(data: dict) -> None:
         pass
 
 
+def _data_payload(resp: object) -> dict:
+    payload = resp.json()
+    return payload["data"]
+
+
+def _error_items(resp: object) -> list[dict]:
+    payload = resp.json()
+    return payload.get("errors") or []
+
+
+def _assert_meta_versions(resp: object) -> None:
+    payload = resp.json()
+    meta = payload.get("meta") or {}
+    assert meta.get("api_version")
+    assert meta.get("schema_version")
+
+
+def _assert_meta_request_id(resp: object) -> None:
+    payload = resp.json()
+    meta = payload.get("meta") or {}
+    assert meta.get("request_id")
+
+
+def _find_error_by_path(errors: list[dict], path: str) -> dict:
+    for item in errors:
+        if item.get("path") == path:
+            return item
+    assert False, f"Expected error path {path}, got {[item.get('path') for item in errors]}"
+
+
 def test_health(monkeypatch: object) -> None:
     client = _client(monkeypatch)
     ms, resp = _measure(client, "GET", "/v1/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    _assert_meta_versions(resp)
+    assert _data_payload(resp) == {"status": "ok"}
     _write_latency_log({"health_ms": ms})
 
 
@@ -69,7 +100,8 @@ def test_config(monkeypatch: object) -> None:
     client = _client(monkeypatch)
     ms, resp = _measure(client, "GET", "/v1/config")
     assert resp.status_code == 200
-    payload = resp.json()
+    _assert_meta_versions(resp)
+    payload = _data_payload(resp)
 
     defaults = payload["defaults"]
     assert defaults["house_system"] == DEFAULT_HOUSE_SYSTEM
@@ -122,7 +154,7 @@ def test_chart_schema(monkeypatch: object) -> None:
         },
     )
     assert resp.status_code == 200
-    payload = resp.json()
+    payload = _data_payload(resp)
 
     for key in ("meta", "bodies", "asteroids", "angles", "houses", "points", "aspects", "stars"):
         assert key in payload
@@ -174,8 +206,48 @@ def test_chart_lilith_enabled(monkeypatch: object) -> None:
         },
     )
     assert resp.status_code == 200
-    payload = resp.json()
+    payload = _data_payload(resp)
     assert "lilith (black moon)" in payload["points"]
+
+
+def test_chart_rejects_unknown_fields(monkeypatch: object) -> None:
+    client = _client(monkeypatch)
+    resp = client.post(
+        "/v1/chart",
+        json={
+            "metadata": {
+                "chart_type": "natal",
+                "timestamp_utc": "1982-05-08T06:39:00+03:00",
+                "location": "Karadeniz Eregli",
+                "name": "Legacy Name",
+            }
+        },
+    )
+    assert resp.status_code == 422
+    _assert_meta_versions(resp)
+    errors = _error_items(resp)
+    item = _find_error_by_path(errors, "/metadata/name")
+    assert item["code"] == "UNKNOWN_FIELD"
+    assert "message" in item
+
+
+def test_chart_rejects_invalid_enum(monkeypatch: object) -> None:
+    client = _client(monkeypatch)
+    resp = client.post(
+        "/v1/chart",
+        json={
+            "metadata": {
+                "chart_type": "invalid_mode",
+                "timestamp_utc": "1982-05-08T06:39:00+03:00",
+                "location": "Karadeniz Eregli",
+            }
+        },
+    )
+    assert resp.status_code == 422
+    errors = _error_items(resp)
+    item = _find_error_by_path(errors, "/metadata/chart_type")
+    assert item["code"] == "UNSUPPORTED_VALUE"
+    assert "message" in item
 
 
 def test_transit_basic(monkeypatch: object) -> None:
@@ -194,11 +266,33 @@ def test_transit_basic(monkeypatch: object) -> None:
         },
     )
     assert resp.status_code == 200
-    payload = resp.json()
+    payload = _data_payload(resp)
     assert payload["meta"]["transit_type"] == "transit"
     assert "aspects" in payload
     assert "frame_a" not in payload
     assert "frame_b" not in payload
+
+
+def test_transit_rejects_unknown_fields(monkeypatch: object) -> None:
+    client = _client(monkeypatch)
+    resp = client.post(
+        "/v1/transit",
+        json={
+            "metadata": {"transit_type": "transit", "output": "chart"},
+            "frame_a": {
+                "metadata": {
+                    "chart_type": "natal",
+                    "timestamp_utc": "1982-05-08T06:39:00+03:00",
+                    "location": "Karadeniz Eregli",
+                }
+            },
+        },
+    )
+    assert resp.status_code == 422
+    errors = _error_items(resp)
+    item = _find_error_by_path(errors, "/metadata/output")
+    assert item["code"] == "UNKNOWN_FIELD"
+    assert "message" in item
 
 
 def test_transit_modes(monkeypatch: object) -> None:
@@ -223,7 +317,7 @@ def test_transit_modes(monkeypatch: object) -> None:
             },
         )
         assert resp.status_code == 200
-        payload = resp.json()
+        payload = _data_payload(resp)
         assert payload["meta"]["transit_type"] == transit_type
         assert "aspects" in payload
 
@@ -235,7 +329,7 @@ def test_transit_modes(monkeypatch: object) -> None:
         },
     )
     assert resp.status_code == 200
-    payload = resp.json()
+    payload = _data_payload(resp)
     assert payload["meta"]["transit_type"] == "astrocartography"
     assert "results" in payload
     assert "crossings" in payload
@@ -255,7 +349,7 @@ def test_transit_modes(monkeypatch: object) -> None:
         },
     )
     assert resp.status_code == 200
-    payload = resp.json()
+    payload = _data_payload(resp)
     assert payload["meta"]["transit_type"] == "solar_arc"
     assert payload["meta"]["solar_arc_sun"] == "mean"
     assert "aspects" in payload
@@ -275,7 +369,7 @@ def test_transit_modes(monkeypatch: object) -> None:
         },
     )
     assert resp.status_code == 200
-    payload = resp.json()
+    payload = _data_payload(resp)
     assert payload["meta"]["transit_type"] == "synastry"
     assert "aspects" in payload
 
@@ -300,9 +394,36 @@ def test_timeline_basic(monkeypatch: object) -> None:
         },
     )
     assert resp.status_code == 200
-    payload = resp.json()
+    payload = _data_payload(resp)
     assert payload["meta"]["level"] == "level1"
     assert "events" in payload
+
+
+def test_timeline_rejects_unknown_fields(monkeypatch: object) -> None:
+    client = _client(monkeypatch)
+    resp = client.post(
+        "/v1/timeline",
+        json={
+            "metadata": {
+                "start_utc": "2030-01-01T00:00:00Z",
+                "end_utc": "2031-01-01T00:00:00Z",
+                "level": "level1",
+                "step_years": 1,
+            },
+            "natal": {
+                "metadata": {
+                    "chart_type": "natal",
+                    "timestamp_utc": "1982-05-08T06:39:00+03:00",
+                    "location": "Karadeniz Eregli",
+                }
+            },
+        },
+    )
+    assert resp.status_code == 422
+    errors = _error_items(resp)
+    item = _find_error_by_path(errors, "/metadata/step_years")
+    assert item["code"] == "UNKNOWN_FIELD"
+    assert "message" in item
 
 
 def test_timeline_body_override(monkeypatch: object) -> None:
@@ -326,7 +447,7 @@ def test_timeline_body_override(monkeypatch: object) -> None:
         },
     )
     assert resp.status_code == 200
-    payload = resp.json()
+    payload = _data_payload(resp)
     assert payload["meta"]["level"] == "outer"
     assert "events" in payload
 
@@ -351,7 +472,7 @@ def test_timeline_lunations(monkeypatch: object) -> None:
         },
     )
     assert resp.status_code == 200
-    payload = resp.json()
+    payload = _data_payload(resp)
     assert payload["meta"]["level"] == "eclipses"
     assert "events" in payload
 
@@ -376,7 +497,7 @@ def test_progression_timeline(monkeypatch: object) -> None:
         },
     )
     assert resp.status_code == 200
-    payload = resp.json()
+    payload = _data_payload(resp)
     assert "events" in payload
     event = payload["events"][0]
     assert "transit" in event
@@ -384,3 +505,31 @@ def test_progression_timeline(monkeypatch: object) -> None:
     assert "aspect" in event
     assert "phases" in event
     assert event["transit"]["body"] not in {"uranus", "neptune", "pluto"}
+
+
+def test_internal_error_envelope(monkeypatch: object) -> None:
+    client = _client(monkeypatch, raise_server_exceptions=False)
+    import app.main as main_module
+
+    def _boom(*_args, **_kwargs):
+        raise Exception("boom")
+
+    monkeypatch.setattr(main_module, "calc_chart", _boom)
+    resp = client.post(
+        "/v1/chart",
+        json={
+            "metadata": {
+                "chart_type": "natal",
+                "timestamp_utc": "1982-05-08T06:39:00+03:00",
+                "location": "Karadeniz Eregli",
+            }
+        },
+    )
+    assert resp.status_code == 500
+    _assert_meta_versions(resp)
+    _assert_meta_request_id(resp)
+    errors = _error_items(resp)
+    assert errors
+    assert errors[0]["code"] == "INTERNAL_ERROR"
+    assert errors[0]["path"] == "/"
+    assert "message" in errors[0]

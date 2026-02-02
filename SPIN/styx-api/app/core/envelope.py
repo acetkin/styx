@@ -9,7 +9,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.core.version import ENGINE_VERSION, EPHEMERIS_PROVIDER, SCHEMA_VERSION
+from app.core.version import API_VERSION, ENGINE_VERSION, EPHEMERIS_PROVIDER, SCHEMA_VERSION
 
 T = TypeVar("T")
 
@@ -26,6 +26,7 @@ class EphemerisInfo(BaseModel):
 
 class Meta(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION)
+    api_version: str = Field(default=API_VERSION)
     engine_version: str = Field(default=ENGINE_VERSION)
     request_id: str
     created_at_utc: str
@@ -81,7 +82,7 @@ class Timing(BaseModel):
 class ErrorItem(BaseModel):
     code: str
     message: str
-    field: str | None = None
+    path: str
     hint: str | None = None
 
 
