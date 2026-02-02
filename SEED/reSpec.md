@@ -1,6 +1,6 @@
 # ReSpec
 
-version: V3-1
+version: V3-2
 
 ## Table of Contents (TOC)
 
