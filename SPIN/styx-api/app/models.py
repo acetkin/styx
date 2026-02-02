@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from typing import Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class LocationObj(BaseModel):
+class RequestModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class LocationObj(RequestModel):
     lat: float
     lon: float
     alt_m: float = 0
@@ -18,7 +22,7 @@ LocationInput = Union[str, LocationObj]
 ChartType = Literal["natal", "moment", "solar_arc", "secondary_progression"]
 
 
-class Metadata(BaseModel):
+class Metadata(RequestModel):
     chart_type: ChartType
     timestamp_utc: Optional[str] = None
     location: Optional[LocationInput] = None
@@ -26,19 +30,24 @@ class Metadata(BaseModel):
     solar_arc_sun: Optional[Literal["mean", "true"]] = None
 
 
-class Settings(BaseModel):
+class PointsSettings(RequestModel):
+    lilith: Optional[Literal["mean", "true"]] = None
+
+
+class Settings(RequestModel):
     house_system: str = Field(default="placidus")
     zodiac: str = Field(default="tropical")
     coordinate_system: str = Field(default="ecliptic")
+    points: Optional[PointsSettings] = None
 
 
-class ChartRequest(BaseModel):
+class ChartRequest(RequestModel):
     metadata: Metadata
     settings: Optional[Settings] = None
     frame_a: Optional["ChartRequest"] = None
 
 
-class ChartFrameRequest(BaseModel):
+class ChartFrameRequest(RequestModel):
     metadata: Metadata
     settings: Optional[Settings] = None
 
@@ -53,7 +62,7 @@ TransitType = Literal[
 ]
 
 
-class TransitMetadata(BaseModel):
+class TransitMetadata(RequestModel):
     transit_type: TransitType
     timestamp_utc: Optional[str] = None
     location: Optional[LocationInput] = None
@@ -64,7 +73,7 @@ class TransitMetadata(BaseModel):
     eclipse_kind: Optional[str] = None
 
 
-class TransitRequest(BaseModel):
+class TransitRequest(RequestModel):
     metadata: TransitMetadata
     frame_a: Optional[ChartFrameRequest] = None
     frame_b: Optional[ChartFrameRequest] = None
@@ -73,14 +82,14 @@ class TransitRequest(BaseModel):
 TimelineType = Literal["transit", "secondary_progression", "solar_arc"]
 
 
-class TimelineMetadata(BaseModel):
+class TimelineMetadata(RequestModel):
     start_utc: str
     end_utc: str
     timeline_type: TimelineType = "transit"
     bodies: Optional[list[str]] = None
 
 
-class TimelineRequest(BaseModel):
+class TimelineRequest(RequestModel):
     metadata: TimelineMetadata
     frame_a: ChartFrameRequest
     settings: Optional[Settings] = None

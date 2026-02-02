@@ -11,6 +11,13 @@ pip install -e .
 uvicorn app.main:app --reload
 ```
 
+## Tests
+
+```bash
+pip install -e ".[dev]"
+python -m pytest -q
+```
+
 ## Smoke Run (local samples)
 
 ```bash
