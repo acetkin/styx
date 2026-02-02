@@ -22,43 +22,33 @@ class Metadata(BaseModel):
     chart_type: ChartType
     timestamp_utc: Optional[str] = None
     location: Optional[LocationInput] = None
-    name: Optional[str] = None
+    client_name: Optional[str] = None
     solar_arc_sun: Optional[Literal["mean", "true"]] = None
-
-
-class PointsSettings(BaseModel):
-    lilith: Optional[Literal["mean", "true"]] = None
 
 
 class Settings(BaseModel):
     house_system: str = Field(default="placidus")
     zodiac: str = Field(default="tropical")
     coordinate_system: str = Field(default="ecliptic")
-    points: Optional[PointsSettings] = None
-
-
-class Subject(BaseModel):
-    name: Optional[str] = None
 
 
 class ChartRequest(BaseModel):
     metadata: Metadata
-    subject: Optional[Subject] = None
     settings: Optional[Settings] = None
     frame_a: Optional["ChartRequest"] = None
 
 
+class ChartFrameRequest(BaseModel):
+    metadata: Metadata
+    settings: Optional[Settings] = None
+
+
 TransitType = Literal[
     "transit",
-    "on_natal",
     "synastry",
     "astrocartography",
     "solar_arc",
     "secondary_progression",
-    "secondary_progression_100y",
-    "timeline_major",
-    "eclipses",
-    "eclipse_transits",
     "lunations",
 ]
 
@@ -68,7 +58,6 @@ class TransitMetadata(BaseModel):
     timestamp_utc: Optional[str] = None
     location: Optional[LocationInput] = None
     solar_arc_sun: Optional[Literal["mean", "true"]] = None
-    output: Optional[Literal["aspects", "chart"]] = None
     start_utc: Optional[str] = None
     end_utc: Optional[str] = None
     lunation_type: Optional[str] = None
@@ -77,53 +66,23 @@ class TransitMetadata(BaseModel):
 
 class TransitRequest(BaseModel):
     metadata: TransitMetadata
-    frame_a: Optional[ChartRequest] = None
-    frame_b: Optional[ChartRequest] = None
+    frame_a: Optional[ChartFrameRequest] = None
+    frame_b: Optional[ChartFrameRequest] = None
 
 
-TimelineLevel = Literal[
-    "level1",
-    "level2",
-    "level3",
-    "outer",
-    "jupiter",
-    "saturn",
-    "uranus",
-    "neptune",
-    "pluto",
-    "nodes",
-    "lunations",
-    "eclipses",
-    "new_moon",
-    "full_moon",
-    "solar_eclipse",
-    "lunar_eclipse",
-]
+TimelineType = Literal["transit", "secondary_progression", "solar_arc"]
 
 
 class TimelineMetadata(BaseModel):
     start_utc: str
     end_utc: str
-    level: TimelineLevel
-    body: Optional[str] = None
+    timeline_type: TimelineType = "transit"
+    bodies: Optional[list[str]] = None
 
 
 class TimelineRequest(BaseModel):
     metadata: TimelineMetadata
-    natal: ChartRequest
-    settings: Optional[Settings] = None
-
-
-class ProgressionTimelineMetadata(BaseModel):
-    start_utc: str
-    end_utc: str
-    step_years: Optional[int] = 1
-    output: Optional[Literal["aspects", "chart"]] = None
-
-
-class ProgressionTimelineRequest(BaseModel):
-    metadata: ProgressionTimelineMetadata
-    natal: ChartRequest
+    frame_a: ChartFrameRequest
     settings: Optional[Settings] = None
 
 

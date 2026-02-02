@@ -61,7 +61,7 @@ def test_health(monkeypatch: object) -> None:
     client = _client(monkeypatch)
     ms, resp = _measure(client, "GET", "/v1/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    assert resp.json()["data"] == {"status": "ok"}
     _write_latency_log({"health_ms": ms})
 
 
@@ -69,14 +69,13 @@ def test_config(monkeypatch: object) -> None:
     client = _client(monkeypatch)
     ms, resp = _measure(client, "GET", "/v1/config")
     assert resp.status_code == 200
-    payload = resp.json()
+    payload = resp.json()["data"]
 
     defaults = payload["defaults"]
     assert defaults["house_system"] == DEFAULT_HOUSE_SYSTEM
     assert defaults["zodiac"] == DEFAULT_ZODIAC
     assert defaults["coordinate_system"] == DEFAULT_COORDINATE_SYSTEM
     assert defaults["star_orb"] == DEFAULT_STAR_ORB
-    assert defaults["points"]["lilith"] == "mean"
 
     catalogs = payload["catalogs"]
     assert catalogs["planets"] == PLANET_ORDER
@@ -122,11 +121,11 @@ def test_chart_schema(monkeypatch: object) -> None:
         },
     )
     assert resp.status_code == 200
-    payload = resp.json()
+    payload = resp.json()["data"]
 
     for key in ("meta", "bodies", "asteroids", "angles", "houses", "points", "aspects", "stars"):
         assert key in payload
-    assert "name" in payload["meta"]
+    assert "client_name" in payload["meta"]
 
     for angle in ("asc", "dsc", "mc", "ic"):
         assert set(payload["angles"][angle].keys()) == {"lon", "sign", "deg_in_sign"}
@@ -155,7 +154,7 @@ def test_chart_schema(monkeypatch: object) -> None:
     _write_latency_log({"chart_ms": ms})
 
 
-def test_chart_lilith_enabled(monkeypatch: object) -> None:
+def test_chart_ignores_points_setting(monkeypatch: object) -> None:
     client = _client(monkeypatch)
     resp = client.post(
         "/v1/chart",
@@ -174,8 +173,6 @@ def test_chart_lilith_enabled(monkeypatch: object) -> None:
         },
     )
     assert resp.status_code == 200
-    payload = resp.json()
-    assert "lilith (black moon)" in payload["points"]
 
 
 def test_transit_basic(monkeypatch: object) -> None:
@@ -195,10 +192,11 @@ def test_transit_basic(monkeypatch: object) -> None:
     )
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["meta"]["transit_type"] == "transit"
-    assert "aspects" in payload
-    assert "frame_a" not in payload
-    assert "frame_b" not in payload
+    data = payload["data"]
+    assert data["meta"]["transit_type"] == "transit"
+    assert "aspects" in data
+    assert "frame_a" not in data
+    assert "frame_b" not in data
 
 
 def test_transit_modes(monkeypatch: object) -> None:
@@ -210,7 +208,7 @@ def test_transit_modes(monkeypatch: object) -> None:
             "location": "Karadeniz Eregli",
         }
     }
-    for transit_type in ("on_natal", "secondary_progression"):
+    for transit_type in ("transit", "secondary_progression"):
         resp = client.post(
             "/v1/transit",
             json={
@@ -224,8 +222,9 @@ def test_transit_modes(monkeypatch: object) -> None:
         )
         assert resp.status_code == 200
         payload = resp.json()
-        assert payload["meta"]["transit_type"] == transit_type
-        assert "aspects" in payload
+        data = payload["data"]
+        assert data["meta"]["transit_type"] == transit_type
+        assert "aspects" in data
 
     resp = client.post(
         "/v1/transit",
@@ -236,12 +235,13 @@ def test_transit_modes(monkeypatch: object) -> None:
     )
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["meta"]["transit_type"] == "astrocartography"
-    assert "results" in payload
-    assert "crossings" in payload
-    assert "aspects" not in payload
-    assert payload["results"]
-    assert any(item["country"] == "Turkey" for item in payload["results"])
+    data = payload["data"]
+    assert data["meta"]["transit_type"] == "astrocartography"
+    assert "results" in data
+    assert "crossings" in data
+    assert "aspects" not in data
+    assert data["results"]
+    assert any(item["country"] == "Turkey" for item in data["results"])
 
     resp = client.post(
         "/v1/transit",
@@ -256,9 +256,10 @@ def test_transit_modes(monkeypatch: object) -> None:
     )
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["meta"]["transit_type"] == "solar_arc"
-    assert payload["meta"]["solar_arc_sun"] == "mean"
-    assert "aspects" in payload
+    data = payload["data"]
+    assert data["meta"]["transit_type"] == "solar_arc"
+    assert data["meta"]["solar_arc_sun"] == "mean"
+    assert "aspects" in data
 
     resp = client.post(
         "/v1/transit",
@@ -276,8 +277,9 @@ def test_transit_modes(monkeypatch: object) -> None:
     )
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["meta"]["transit_type"] == "synastry"
-    assert "aspects" in payload
+    data = payload["data"]
+    assert data["meta"]["transit_type"] == "synastry"
+    assert "aspects" in data
 
 
 def test_timeline_basic(monkeypatch: object) -> None:
@@ -288,9 +290,9 @@ def test_timeline_basic(monkeypatch: object) -> None:
             "metadata": {
                 "start_utc": "2030-01-01T00:00:00Z",
                 "end_utc": "2031-01-01T00:00:00Z",
-                "level": "level1",
+                "bodies": ["uranus", "neptune", "pluto"],
             },
-            "natal": {
+            "frame_a": {
                 "metadata": {
                     "chart_type": "natal",
                     "timestamp_utc": "1982-05-08T06:39:00+03:00",
@@ -301,8 +303,9 @@ def test_timeline_basic(monkeypatch: object) -> None:
     )
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["meta"]["level"] == "level1"
-    assert "events" in payload
+    data = payload["data"]
+    assert data["meta"]["bodies"] == ["uranus", "neptune", "pluto"]
+    assert "events" in data
 
 
 def test_timeline_body_override(monkeypatch: object) -> None:
@@ -313,10 +316,9 @@ def test_timeline_body_override(monkeypatch: object) -> None:
             "metadata": {
                 "start_utc": "2030-01-01T00:00:00Z",
                 "end_utc": "2031-01-01T00:00:00Z",
-                "level": "outer",
-                "body": "uranus",
+                "bodies": ["uranus"],
             },
-            "natal": {
+            "frame_a": {
                 "metadata": {
                     "chart_type": "natal",
                     "timestamp_utc": "1982-05-08T06:39:00+03:00",
@@ -327,8 +329,9 @@ def test_timeline_body_override(monkeypatch: object) -> None:
     )
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["meta"]["level"] == "outer"
-    assert "events" in payload
+    data = payload["data"]
+    assert data["meta"]["bodies"] == ["uranus"]
+    assert "events" in data
 
 
 def test_timeline_lunations(monkeypatch: object) -> None:
@@ -339,9 +342,9 @@ def test_timeline_lunations(monkeypatch: object) -> None:
             "metadata": {
                 "start_utc": "2026-01-01T00:00:00Z",
                 "end_utc": "2026-06-01T00:00:00Z",
-                "level": "eclipses",
+                "bodies": ["eclipses"],
             },
-            "natal": {
+            "frame_a": {
                 "metadata": {
                     "chart_type": "natal",
                     "timestamp_utc": "1982-05-08T06:39:00+03:00",
@@ -352,21 +355,22 @@ def test_timeline_lunations(monkeypatch: object) -> None:
     )
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["meta"]["level"] == "eclipses"
-    assert "events" in payload
+    data = payload["data"]
+    assert data["meta"]["bodies"] == ["eclipses"]
+    assert "events" in data
 
 
 def test_progression_timeline(monkeypatch: object) -> None:
     client = _client(monkeypatch)
     resp = client.post(
-        "/v1/progression_timeline",
+        "/v1/timeline",
         json={
             "metadata": {
                 "start_utc": "1982-05-08T03:39:00Z",
                 "end_utc": "1983-05-08T03:39:00Z",
-                "step_years": 1,
+                "timeline_type": "secondary_progression",
             },
-            "natal": {
+            "frame_a": {
                 "metadata": {
                     "chart_type": "natal",
                     "timestamp_utc": "1982-05-08T06:39:00+03:00",
@@ -377,10 +381,38 @@ def test_progression_timeline(monkeypatch: object) -> None:
     )
     assert resp.status_code == 200
     payload = resp.json()
-    assert "events" in payload
-    event = payload["events"][0]
+    data = payload["data"]
+    assert "events" in data
+    event = data["events"][0]
     assert "transit" in event
     assert "natal" in event
     assert "aspect" in event
     assert "phases" in event
     assert event["transit"]["body"] not in {"uranus", "neptune", "pluto"}
+
+
+def test_solar_arc_timeline(monkeypatch: object) -> None:
+    client = _client(monkeypatch)
+    resp = client.post(
+        "/v1/timeline",
+        json={
+            "metadata": {
+                "start_utc": "2020-01-01T00:00:00Z",
+                "end_utc": "2020-06-01T00:00:00Z",
+                "timeline_type": "solar_arc",
+                "bodies": ["jupiter", "saturn"],
+            },
+            "frame_a": {
+                "metadata": {
+                    "chart_type": "natal",
+                    "timestamp_utc": "1982-05-08T06:39:00+03:00",
+                    "location": "Karadeniz Eregli",
+                }
+            },
+        },
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    data = payload["data"]
+    assert data["meta"]["timeline_type"] == "solar_arc"
+    assert data["meta"]["bodies"] == ["jupiter", "saturn"]

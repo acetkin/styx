@@ -8,7 +8,7 @@
 
 ## C1 — Stage 1 (Early/Internal) (Living)
 - audience: Internal team and trusted testers.
-- deliverables: SPIN/styx-api with /v1/health, /v1/config, /v1/chart, /v1/transit, /v1/timeline, /v1/progression_timeline; envelope responses; datasets (cities5000, countryInfo, lunations_100y.csv); basic tests and smoke run.
+- deliverables: SPIN/styx-api with /v1/health, /v1/config, /v1/chart, /v1/transit, /v1/timeline; envelope responses; lunations_100y.csv; basic tests and smoke run.
 - metrics: Determinism verified; tests passing; envelope shape stable; core payloads complete.
 
 ## C2 — Stage 2 (Beta/Feedback) (Living)

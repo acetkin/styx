@@ -746,12 +746,7 @@ def calc_chart(
         lot_house = _assign_house(lot_lon, 0.0, cusps, armc, location["lat"], hsys, eps)
         lots[name] = _body_like_from_lon_lat(lot_lon, 0.0, 0.0, lot_house)
 
-    lilith_mode = "mean"
-    points_settings = getattr(settings, "points", None)
-    if points_settings and points_settings.lilith:
-        lilith_mode = points_settings.lilith
-    lilith_id = swe.MEAN_APOG if lilith_mode == "mean" else swe.OSCU_APOG
-    lilith = _calc_body(jd, lilith_id, f"lilith_{lilith_mode}")
+    lilith = _calc_body(jd, swe.MEAN_APOG, "lilith_mean")
     lilith["house"] = _assign_house(lilith["lon"], lilith["lat"], cusps, armc, location["lat"], hsys, eps)
 
     angles = {

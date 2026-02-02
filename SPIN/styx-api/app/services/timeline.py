@@ -56,6 +56,7 @@ STEP_DAYS = {
     "nn": 2.0,
     "sn": 2.0,
 }
+STEP_SCHEDULE_DAYS = [30.0, 7.0, 1.0, 1.0 / 24.0, 1.0 / 1440.0]
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,53 @@ def _find_root(func, a: float, b: float, steps: int = 40) -> float:
         else:
             a, fa = mid, fm
     return (a + b) / 2.0
+
+
+def _scan_brackets(func, start_jd: float, end_jd: float, step_days: float) -> list[tuple[float, float]]:
+    brackets: list[tuple[float, float]] = []
+    t = start_jd
+    prev = func(t)
+    while t < end_jd:
+        t_next = min(t + step_days, end_jd)
+        cur = func(t_next)
+        if prev == 0:
+            brackets.append((t, t))
+        elif prev * cur <= 0:
+            brackets.append((t, t_next))
+        prev = cur
+        t = t_next
+    return brackets
+
+
+def _adaptive_roots(func, start_jd: float, end_jd: float) -> list[float]:
+    brackets = [(start_jd, end_jd)]
+    for step_days in STEP_SCHEDULE_DAYS:
+        refined: list[tuple[float, float]] = []
+        for a, b in brackets:
+            refined.extend(_scan_brackets(func, a, b, step_days))
+        brackets = refined
+        if not brackets:
+            return []
+    roots: list[float] = []
+    for a, b in brackets:
+        roots.append(_find_root(func, a, b))
+    return sorted({round(r, 6) for r in roots})
+
+
+def _adaptive_crossing(func, start_jd: float, end_jd: float, forward: bool) -> float | None:
+    if start_jd == end_jd:
+        return start_jd
+    brackets = [(start_jd, end_jd)]
+    for step_days in STEP_SCHEDULE_DAYS:
+        refined: list[tuple[float, float]] = []
+        for a, b in brackets:
+            refined.extend(_scan_brackets(func, a, b, step_days))
+        if refined:
+            brackets = refined
+        if not brackets:
+            return None
+    chosen = brackets[0] if forward else brackets[-1]
+    return _find_root(func, chosen[0], chosen[1])
 
 
 def _find_stations(body_key: str, start_jd: float, end_jd: float) -> List[Station]:
@@ -205,55 +253,11 @@ def _transit_house_info(jd: float, lon: float, lat: float, location: dict, house
     return {"house": house, "sign": _house_sign(cusps, house)}
 
 
-def _segment_times(start_jd: float, end_jd: float, stations: List[Station]) -> List[Tuple[float, float, Station | None, Station | None]]:
-    points = [s.jd for s in stations if start_jd < s.jd < end_jd]
-    boundaries = [start_jd] + points + [end_jd]
-    segments: List[Tuple[float, float, Station | None, Station | None]] = []
-    for i in range(len(boundaries) - 1):
-        seg_start = boundaries[i]
-        seg_end = boundaries[i + 1]
-        start_station = None
-        end_station = None
-        for s in stations:
-            if abs(s.jd - seg_start) < 1e-6:
-                start_station = s
-            if abs(s.jd - seg_end) < 1e-6:
-                end_station = s
-        segments.append((seg_start, seg_end, start_station, end_station))
-    return segments
-
-
-def _find_exact_in_segment(transit_body: str, target_lon: float, angle: float, seg_start: float, seg_end: float) -> float | None:
-    def delta(jd: float) -> float:
-        lon, _, _ = _body_position(jd, transit_body)
-        return _aspect_delta(lon, target_lon, angle)
-
-    d_start = delta(seg_start)
-    d_end = delta(seg_end)
-    if d_start == 0:
-        return seg_start
-    if d_end == 0:
-        return seg_end
-    if d_start * d_end > 0:
-        return None
-    return _find_root(delta, seg_start, seg_end)
-
-
-def _find_orb_crossing(transit_body: str, target_lon: float, angle: float, orb: float, a: float, b: float) -> float | None:
-    def f(jd: float) -> float:
-        lon, _, _ = _body_position(jd, transit_body)
-        delta = _aspect_delta(lon, target_lon, angle)
-        return abs(delta) - orb
-
-    fa = f(a)
-    fb = f(b)
-    if fa == 0:
-        return a
-    if fb == 0:
-        return b
-    if fa * fb > 0:
-        return None
-    return _find_root(f, a, b)
+def _station_tag(stations: List[Station], jd: float) -> str | None:
+    for station in stations:
+        if abs(station.jd - jd) < 1e-4:
+            return station.kind
+    return None
 
 
 def build_timeline(
@@ -281,7 +285,6 @@ def build_timeline(
     for transit_body in bodies:
         orb = TRANSIT_ORB_TABLE["nodes"] if transit_body in {"nn", "sn"} else TRANSIT_ORB_TABLE[transit_body]
         stations = _find_stations("nn" if transit_body == "sn" else transit_body, start_jd, end_jd)
-        segments = _segment_times(start_jd, end_jd, stations)
 
         for target_name, target in targets:
             target_lon = target["lon"]
@@ -295,18 +298,20 @@ def build_timeline(
                 transit_start = None
                 transit_end = None
 
-                for seg_start, seg_end, seg_station_start, seg_station_end in segments:
-                    exact_jd = _find_exact_in_segment(transit_body, target_lon, angle, seg_start, seg_end)
-                    if exact_jd is None:
-                        continue
+                def delta(jd: float) -> float:
+                    lon, _, _ = _body_position(jd, transit_body)
+                    return _aspect_delta(lon, target_lon, angle)
+
+                def orb_func(jd: float) -> float:
+                    lon, _, _ = _body_position(jd, transit_body)
+                    return abs(_aspect_delta(lon, target_lon, angle)) - orb
+
+                exact_jds = _adaptive_roots(delta, start_jd, end_jd)
+                for exact_jd in exact_jds:
                     exact_index += 1
 
-                    entry = _find_orb_crossing(transit_body, target_lon, angle, orb, seg_start, exact_jd)
-                    if entry is None:
-                        entry = seg_start
-                    exit_ = _find_orb_crossing(transit_body, target_lon, angle, orb, exact_jd, seg_end)
-                    if exit_ is None:
-                        exit_ = seg_end
+                    entry = _adaptive_crossing(orb_func, start_jd, exact_jd, forward=False) or start_jd
+                    exit_ = _adaptive_crossing(orb_func, exact_jd, end_jd, forward=True) or end_jd
 
                     for phase_name, jd in (
                         ("approaching", entry),
@@ -315,11 +320,7 @@ def build_timeline(
                     ):
                         lon, lat, _ = _body_position(jd, transit_body)
                         transit_house = _transit_house_info(jd, lon, lat, location, house_system)
-                        station_tag = None
-                        if seg_station_start and abs(seg_station_start.jd - jd) < 1e-4:
-                            station_tag = seg_station_start.kind
-                        if seg_station_end and abs(seg_station_end.jd - jd) < 1e-4:
-                            station_tag = seg_station_end.kind
+                        station_tag = _station_tag(stations, jd)
                         if station_tag:
                             transit_house = {**transit_house, "transit_station": station_tag}
                         if first_transit_house is None and phase_name in {"approaching", "exact"}:

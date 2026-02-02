@@ -18,7 +18,7 @@ from app.config import (
     SIGNS,
     TRANSIT_ORB_TABLE,
 )
-from app.models import ChartRequest, LocationObj, Settings, TransitRequest, TimelineRequest, ProgressionTimelineRequest
+from app.models import ChartRequest, LocationObj, Settings, TransitRequest, TimelineRequest
 from app.core.envelope import (
     CoordinatesSettings,
     InputSummary,
@@ -46,6 +46,7 @@ from app.services.astro import (
 from app.services.geocode import geocode_ip, geocode_place
 from app.services.timeline import build_timeline
 from app.services.progression_timeline import build_progression_timeline
+from app.services.solar_arc_timeline import build_solar_arc_timeline
 
 app = FastAPI(title="STYX API", version="0.1.0")
 app.middleware("http")(request_id_middleware)
@@ -182,7 +183,6 @@ def config(request: Request):
             "zodiac": DEFAULT_ZODIAC,
             "coordinate_system": DEFAULT_COORDINATE_SYSTEM,
             "star_orb": DEFAULT_STAR_ORB,
-            "points": {"lilith": "mean"},
         },
         "catalogs": {
             "planets": PLANET_ORDER,
@@ -303,19 +303,17 @@ def _resolve_chart_frame(frame: ChartRequest, request: Request, *, allow_derived
     return payload, timestamp_utc, location, settings
 
 
-def _resolved_name(req: ChartRequest) -> str | None:
+def _resolved_client_name(req: ChartRequest) -> str | None:
     return (
-        req.metadata.name
-        or (req.subject.name if req.subject else None)
-        or (req.frame_a.metadata.name if req.frame_a else None)
-        or (req.frame_a.subject.name if req.frame_a and req.frame_a.subject else None)
+        req.metadata.client_name
+        or (req.frame_a.metadata.client_name if req.frame_a else None)
     )
 
 
 @app.post("/v1/chart")
 def chart(req: ChartRequest, request: Request) -> dict:
     chart_type = req.metadata.chart_type
-    name = _resolved_name(req)
+    client_name = _resolved_client_name(req)
 
     if chart_type in {"natal", "moment"}:
         settings = req.settings or Settings()
@@ -332,7 +330,8 @@ def chart(req: ChartRequest, request: Request) -> dict:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         base_meta = dict(payload["meta"])
         base_meta.pop("name", None)
-        payload["meta"] = {"name": name, **base_meta}
+        base_meta.pop("client_name", None)
+        payload["meta"] = {"client_name": client_name, **base_meta}
         return envelope_response(
             request=request,
             data=payload,
@@ -376,7 +375,8 @@ def chart(req: ChartRequest, request: Request) -> dict:
         payload = round_payload(payload, 2)
         base_meta = dict(payload["meta"])
         base_meta.pop("name", None)
-        payload["meta"] = {"name": name, **base_meta}
+        base_meta.pop("client_name", None)
+        payload["meta"] = {"client_name": client_name, **base_meta}
         return envelope_response(
             request=request,
             data=payload,
@@ -425,7 +425,8 @@ def chart(req: ChartRequest, request: Request) -> dict:
         payload = round_payload(payload, 2)
         base_meta = dict(payload["meta"])
         base_meta.pop("name", None)
-        payload["meta"] = {"name": name, **base_meta}
+        base_meta.pop("client_name", None)
+        payload["meta"] = {"client_name": client_name, **base_meta}
         return envelope_response(
             request=request,
             data=payload,
@@ -474,7 +475,7 @@ def transit(req: TransitRequest, request: Request) -> dict:
         }
         return _wrap(payload, req.metadata.start_utc, None, None)
 
-    if transit_type not in {"transit", "on_natal", "synastry", "astrocartography", "solar_arc", "secondary_progression"}:
+    if transit_type not in {"transit", "synastry", "astrocartography", "solar_arc", "secondary_progression"}:
         raise HTTPException(status_code=422, detail=f"Unsupported transit_type: {transit_type}")
 
     if req.frame_a is None:
@@ -531,11 +532,6 @@ def transit(req: TransitRequest, request: Request) -> dict:
             )
 
     if transit_type == "solar_arc":
-        if req.metadata.output and req.metadata.output != "aspects":
-            raise HTTPException(
-                status_code=422,
-                detail="solar_arc chart output moved to /v1/chart with chart_type=solar_arc",
-            )
         try:
             frame_a_chart = _resolve_frame(frame_a_req)
             frame_b_chart = _resolve_frame(frame_b_req)
@@ -581,11 +577,6 @@ def transit(req: TransitRequest, request: Request) -> dict:
         return _wrap(payload, frame_b_chart["meta"]["timestamp_utc"], frame_b_chart["meta"]["location"], frame_b_req.settings)
 
     if transit_type == "secondary_progression":
-        if req.metadata.output and req.metadata.output != "aspects":
-            raise HTTPException(
-                status_code=422,
-                detail="secondary_progression chart output moved to /v1/chart with chart_type=secondary_progression",
-            )
         try:
             frame_a_chart = _resolve_frame(frame_a_req)
             frame_b_chart = _resolve_frame(frame_b_req)
@@ -645,7 +636,7 @@ def transit(req: TransitRequest, request: Request) -> dict:
         label_a = f"{label_a}_a"
         label_b = f"{label_b}_b"
 
-    if transit_type in {"transit", "on_natal"}:
+    if transit_type == "transit":
         prefix_a = "natal_"
         prefix_b = "tr_"
     else:
@@ -665,8 +656,6 @@ def transit(req: TransitRequest, request: Request) -> dict:
         prefix_b,
     )
 
-    name_a = frame_a_req.metadata.name or (frame_a_req.subject.name if frame_a_req.subject else None)
-    name_b = frame_b_req.metadata.name or (frame_b_req.subject.name if frame_b_req.subject else None)
     meta = {
         "transit_type": transit_type,
         "timestamp_utc": frame_b_chart["meta"]["timestamp_utc"],
@@ -683,20 +672,56 @@ def transit(req: TransitRequest, request: Request) -> dict:
 
 @app.post("/v1/timeline")
 def timeline(req: TimelineRequest, request: Request) -> dict:
-    settings = req.settings or req.natal.settings or Settings()
-    natal_location = _resolve_location(req.natal.metadata.location, request)
-    natal_timestamp = _resolve_timestamp(req.natal.metadata.timestamp_utc)
+    settings = req.settings or req.frame_a.settings or Settings()
+    natal_location = _resolve_location(req.frame_a.metadata.location, request)
+    natal_timestamp = _resolve_timestamp(req.frame_a.metadata.timestamp_utc)
     input_summary = _build_input_summary(natal_timestamp, natal_location)
 
-    level = req.metadata.level
-    body = (req.metadata.body or "").strip().lower() or None
+    timeline_type = req.metadata.timeline_type or "transit"
+    raw_bodies = req.metadata.bodies or []
+    bodies_input = [str(item).strip().lower() for item in raw_bodies if str(item).strip()]
 
-    if level in {"level3", "lunations", "eclipses", "new_moon", "full_moon", "solar_eclipse", "lunar_eclipse"}:
+    try:
+        natal_chart = calc_chart(
+            chart_type="natal",
+            timestamp_utc=natal_timestamp,
+            location=natal_location,
+            settings=settings,
+            round_output=False,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if timeline_type == "secondary_progression":
+        payload = build_progression_timeline(
+            natal_chart=natal_chart,
+            start_utc=req.metadata.start_utc,
+            end_utc=req.metadata.end_utc,
+        )
+        payload_meta = dict(payload.get("meta", {}))
+        payload_meta["timeline_type"] = "secondary_progression"
+        payload["meta"] = payload_meta
+        return envelope_response(
+            request=request,
+            data=payload,
+            settings=_build_envelope_settings(settings),
+            input_summary=input_summary,
+        )
+
+    if not bodies_input:
+        raise HTTPException(status_code=422, detail="bodies is required for timeline_type=transit/solar_arc")
+
+    lunation_keys = {"lunations", "eclipses", "new_moon", "full_moon", "solar_eclipse", "lunar_eclipse"}
+    if timeline_type == "transit" and lunation_keys.intersection(bodies_input):
         lunation_type = None
-        if level == "eclipses":
-            lunation_type = "solar_eclipse | lunar_eclipse"
-        elif level in {"new_moon", "full_moon", "solar_eclipse", "lunar_eclipse"}:
-            lunation_type = level
+        if "lunations" not in bodies_input:
+            types: list[str] = []
+            if "eclipses" in bodies_input:
+                types.extend(["solar_eclipse", "lunar_eclipse"])
+            for key in ("new_moon", "full_moon", "solar_eclipse", "lunar_eclipse"):
+                if key in bodies_input and key not in types:
+                    types.append(key)
+            lunation_type = " | ".join(types) if types else None
         events = filter_lunations(
             start_utc=req.metadata.start_utc,
             end_utc=req.metadata.end_utc,
@@ -708,7 +733,8 @@ def timeline(req: TimelineRequest, request: Request) -> dict:
                 "meta": {
                     "start_utc": req.metadata.start_utc,
                     "end_utc": req.metadata.end_utc,
-                    "level": level,
+                    "timeline_type": "transit",
+                    "bodies": bodies_input,
                 },
                 "events": events,
             },
@@ -716,70 +742,52 @@ def timeline(req: TimelineRequest, request: Request) -> dict:
             input_summary=input_summary,
         )
 
-    try:
-        natal_chart = calc_chart(
-            chart_type="natal",
-            timestamp_utc=natal_timestamp,
-            location=natal_location,
-            settings=settings,
-            round_output=False,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    bodies = None
-    if body:
-        if body in {"nodes", "nn", "sn"}:
-            bodies = ["nn", "sn"] if body == "nodes" else [body]
-        elif body in {"jupiter", "saturn", "uranus", "neptune", "pluto"}:
-            bodies = [body]
+    bodies: list[str] = []
+    for body in bodies_input:
+        if body == "nodes":
+            bodies.extend(["nn", "sn"])
+        elif body in {"nn", "sn", "jupiter", "saturn", "uranus", "neptune", "pluto"}:
+            bodies.append(body)
         else:
             raise HTTPException(status_code=422, detail=f"Unsupported timeline body: {body}")
+    bodies = list(dict.fromkeys(bodies))
+
+    if timeline_type == "solar_arc":
+        payload = build_solar_arc_timeline(
+            natal_chart=natal_chart,
+            start_utc=req.metadata.start_utc,
+            end_utc=req.metadata.end_utc,
+            bodies=bodies,
+        )
+        payload_meta = dict(payload.get("meta", {}))
+        payload_meta["timeline_type"] = "solar_arc"
+        payload_meta["bodies"] = bodies_input
+        payload["meta"] = payload_meta
+        return envelope_response(
+            request=request,
+            data=payload,
+            settings=_build_envelope_settings(settings),
+            input_summary=input_summary,
+        )
 
     try:
         payload = build_timeline(
             natal_chart=natal_chart,
             start_utc=req.metadata.start_utc,
             end_utc=req.metadata.end_utc,
-            level=req.metadata.level,
+            level="custom",
             house_system=settings.house_system,
             bodies=bodies,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return envelope_response(
-        request=request,
-        data=payload,
-        settings=_build_envelope_settings(settings),
-        input_summary=input_summary,
-    )
+    payload_meta = dict(payload.get("meta", {}))
+    payload_meta["timeline_type"] = "transit"
+    payload_meta["bodies"] = bodies_input
+    payload_meta.pop("level", None)
+    payload["meta"] = payload_meta
 
-
-@app.post("/v1/progression_timeline")
-def progression_timeline(req: ProgressionTimelineRequest, request: Request) -> dict:
-    settings = req.settings or req.natal.settings or Settings()
-    natal_location = _resolve_location(req.natal.metadata.location, request)
-    natal_timestamp = _resolve_timestamp(req.natal.metadata.timestamp_utc)
-    input_summary = _build_input_summary(natal_timestamp, natal_location)
-
-    try:
-        natal_chart = calc_chart(
-            chart_type="natal",
-            timestamp_utc=natal_timestamp,
-            location=natal_location,
-            settings=settings,
-            round_output=False,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    payload = build_progression_timeline(
-        natal_chart=natal_chart,
-        start_utc=req.metadata.start_utc,
-        end_utc=req.metadata.end_utc,
-        step_years=req.metadata.step_years or 1,
-    )
     return envelope_response(
         request=request,
         data=payload,

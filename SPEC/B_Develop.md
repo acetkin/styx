@@ -1,8 +1,8 @@
 # B_Develop
 
 ## OVERVIEW (Living)
-- implementation_strategy: Build FastAPI service with Swiss Ephemeris wrappers, envelope responses, and data engines for chart/transit/timeline/progression inside SPIN/styx-api.
-- quality_bar: Deterministic outputs (ordering + rounding), envelope shape stable, tests pass, Swagger examples load.
+- implementation_strategy: Build FastAPI service with Swiss Ephemeris wrappers, envelope responses, and unified timeline engines under SPIN/styx-api.
+- quality_bar: Deterministic outputs (ordering + rounding); envelope shape stable; timelines scanned adaptively; tests pass; Swagger examples load.
 - packaging_policy: Submission-ready code + data only in SPIN/styx-api; non-submission artifacts in SPIN/_local and SPIN/_logs.
 - test_policy: pytest -q (httpx) plus optional scripts/smoke_run_api.py.
 
@@ -20,56 +20,32 @@
   - SPIN workspace created
 
 ### S1 — MVP / First Working Slice
-- goal: Implement /v1/chart MVP and /v1/config with deterministic outputs; include aspects + lilith.
+- goal: Implement /v1/chart (natal/moment) and /v1/config with deterministic outputs; include aspects.
 - exit_criteria:
   - /v1/chart returns full MVP payload
-  - /v1/config catalogs include default asteroids list
+  - /v1/config catalogs include defaults
   - Aspects enabled with explicit orb table
-  - Additional points (e.g., lilith) supported
   - pytest -q passes
 
 ### S2 — Hardening / Feedback Loop
-- goal: Implement /v1/transit modes and calculated chart outputs; improve validation.
+- goal: Add solar_arc/secondary_progression charts, /v1/transit (transit only), and /v1/timeline (transit/secondary_progression/solar_arc + lunations/eclipses).
 - exit_criteria:
-  - /v1/transit supports relationship modes (transit, on_natal, synastry) plus astrocartography, solar_arc, secondary_progression, lunations
-  - /v1/timeline supports level1/level2 and CSV-backed level3/lunations/eclipses
-  - /v1/progression_timeline returns range-based events with phases
-  - Envelope responses stable; datasets bundled and referenced
+  - /v1/chart supports natal/moment/solar_arc/secondary_progression
+  - /v1/transit supports transit aspects between frame_a and frame_b
+  - /v1/timeline supports timeline_type transit/secondary_progression/solar_arc with bodies list and lunations/eclipses tokens
+  - Adaptive scan used for timelines; no step params
+  - Envelope responses stable; lunations CSV bundled and referenced
 
 #### S2 Notes — Transit Endpoint
-- Mode selection via `metadata.transit_type`, returning one output family per request.
-- Relationship modes return cross-aspects only (frames are not returned).
-- Astrocartography returns nearest cities/places per line plus crossings (no rendered maps).
-- Solar arc supports `metadata.solar_arc_sun = mean | true` (mean default).
-- Secondary progression uses day-for-year progression; `metadata.output = chart` returns a progressed chart.
-- Lunations mode returns CSV-backed events using `start_utc` and `end_utc`.
-- status:
-  - charts:
-    - [x] natal
-    - [x] moment
-  - transits:
-    - [x] transit
-    - [x] on_natal
-    - [x] synastry
-    - [x] astrocartography
-    - [x] solar_arc
-    - [x] secondary_progression
-  - calendar:
-    - [x] lunations csv + lunations transit_type
+- transit_type only supports "transit".
+- Requires frame_a and frame_b; computes cross-aspects only.
+- metadata.output does not exist.
 
-#### S2 Notes — Calculated Charts (Levels)
-- Level 1: Outer planets (Uranus, Neptune, Pluto), major aspects only.
-- Level 2: Saturn + Jupiter, major aspects only.
-- Level 3: New moon / Full moon / Eclipses (lunations CSV; LLM workflow).
-- Timeline outputs use `events[]` with `meta.start_utc` and `meta.end_utc`; optional body override can include nodes.
-- Progression timeline outputs align with transit timeline phases; outer planets excluded.
-- Eclipses lists are provided via lunations CSV + LLM workflow (not calculated in API).
-- status:
-  - calculated:
-    - [x] timeline_level1_level2 (range-based)
-    - [x] progression_timeline (range-based)
-    - [x] lunations CSV (100y) + transit_type=lunations
-    - [x] eclipses handled by lunations CSV + LLM workflow
+#### S2 Notes — Timeline Endpoint
+- metadata.timeline_type: transit | secondary_progression | solar_arc.
+- metadata.bodies required for transit/solar_arc; accepts outer planets + jupiter/saturn + nodes; "nodes" normalized to nn/sn.
+- Lunations/eclipses supported via bodies tokens in transit timeline.
+- Adaptive scan down to minute; no step/step_years parameters.
 
 ### S3 — Release / Stable
 - goal: Stabilize API and documentation for public release.
@@ -560,3 +536,19 @@
 - exit_codes: all 0
 - stdout_summary: Updated SPEC and SEED living docs and refreshed snapshot.
 - stderr_summary: none
+
+### [2026-02-02 17:14] DUP Entry DUP-20260202-01
+- target:
+  - SPEC/A_Design.md (OVERVIEW, A1, A2, A3)
+  - SPEC/B_Develop.md (OVERVIEW, STAGES, S2 notes)
+  - SPEC/C_Distribute.md (OVERVIEW, C1, C2, C3)
+  - SEED/STYX.md (full refresh)
+  - SEED/snapshot.md (full refresh)
+- change_intent:
+  - Align design/seed scope to latest API: /v1/health, /v1/config, /v1/chart, /v1/transit, /v1/timeline; chart types include natal/moment/solar_arc/secondary_progression; unify timelines and remove deprecated modes/endpoints.
+  - Remove legacy fields and tighten request/response descriptions to current shapes (transit only, timeline bodies, lunations/eclipses tokens).
+  - Refresh distribution and snapshot to match S3 focus.
+- applied_edits:
+  - Updated SPEC/A_Design.md and SPEC/B_Develop.md to reflect unified timelines, transit-only, and removed legacy fields.
+  - Updated SPEC/C_Distribute.md deliverables to remove progression_timeline and non-transit modes.
+  - Refreshed SEED/STYX.md and SEED/snapshot.md to match latest API scope and examples.
