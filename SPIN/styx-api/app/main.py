@@ -1,6 +1,7 @@
 """FastAPI entry point."""
 
 from datetime import datetime, timezone, timedelta
+from copy import deepcopy
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 
@@ -14,6 +15,7 @@ from app.config import (
     DEFAULT_ZODIAC,
     PLANET_ORDER,
     DEFAULT_FIXED_STARS,
+    SIGNS,
     TRANSIT_ORB_TABLE,
 )
 from app.models import ChartRequest, LocationObj, Settings, TransitRequest, TimelineRequest, ProgressionTimelineRequest
@@ -31,6 +33,7 @@ from app.core.middleware import request_id_middleware, timing_middleware
 from app.services.lunations import filter_lunations
 from app.services.astro import (
     _build_aspect_targets,
+    _calc_aspects,
     _calc_cross_aspects,
     _default_aspect_config,
     _normalize_deg,
@@ -60,6 +63,73 @@ DEFAULT_ORB_ASPECTS = {
 }
 DEFAULT_ORB_POLICY = "default_v1"
 DEFAULT_LUMINARY_BONUS = 2.0
+
+
+def _sign_and_degree(lon: float) -> tuple[str, float]:
+    normalized = _normalize_deg(lon)
+    return SIGNS[int(normalized // 30)], normalized % 30.0
+
+
+def _shift_angle_payload(payload: dict, arc: float) -> dict:
+    shifted = dict(payload)
+    lon = _normalize_deg(float(payload["lon"]) + arc)
+    sign, deg_in_sign = _sign_and_degree(lon)
+    shifted["lon"] = lon
+    shifted["sign"] = sign
+    shifted["deg_in_sign"] = deg_in_sign
+    return shifted
+
+
+def _shift_body_payload(payload: dict, arc: float) -> dict:
+    shifted = dict(payload)
+    lon = _normalize_deg(float(payload["lon"]) + arc)
+    sign, deg_in_sign = _sign_and_degree(lon)
+    shifted["lon"] = lon
+    shifted["sign"] = sign
+    shifted["deg_in_sign"] = deg_in_sign
+    return shifted
+
+
+def _build_solar_arc_chart_payload(frame_a_chart: dict, frame_b_chart: dict, arc: float, sun_mode: str) -> dict:
+    chart = deepcopy(frame_a_chart)
+
+    chart["bodies"] = {name: _shift_body_payload(body, arc) for name, body in frame_a_chart["bodies"].items()}
+    chart["asteroids"] = {name: _shift_body_payload(body, arc) for name, body in frame_a_chart.get("asteroids", {}).items()}
+    chart["angles"] = {name: _shift_angle_payload(payload, arc) for name, payload in frame_a_chart["angles"].items()}
+
+    houses = deepcopy(frame_a_chart["houses"])
+    cusps = houses.get("cusps", {})
+    houses["cusps"] = {name: _shift_angle_payload(payload, arc) for name, payload in cusps.items()}
+    chart["houses"] = houses
+
+    points = deepcopy(frame_a_chart.get("points", {}))
+    for key in ("nn", "sn", "lilith (black moon)"):
+        if key in points:
+            points[key] = _shift_body_payload(points[key], arc)
+    if isinstance(points.get("lots"), dict):
+        points["lots"] = {name: _shift_body_payload(payload, arc) for name, payload in points["lots"].items()}
+    chart["points"] = points
+
+    _, aspect_angles, aspect_orbs, aspect_classes = _default_aspect_config()
+    chart["aspects"] = _calc_aspects(
+        _build_aspect_targets(chart),
+        aspect_angles,
+        aspect_orbs,
+        aspect_classes,
+    )
+    chart["stars"] = []
+
+    meta = dict(chart.get("meta", {}))
+    meta["output_type"] = "solar_arc"
+    meta["mode"] = "chart"
+    meta["chart_type"] = "solar_arc"
+    meta["solar_arc_sun"] = sun_mode
+    meta["solar_arc_deg"] = arc
+    meta["source_timestamp_utc"] = frame_a_chart["meta"]["timestamp_utc"]
+    meta["target_timestamp_utc"] = frame_b_chart["meta"]["timestamp_utc"]
+    meta["timestamp_utc"] = frame_b_chart["meta"]["timestamp_utc"]
+    chart["meta"] = meta
+    return chart
 
 
 def _build_envelope_settings(settings: Settings | None) -> EnvelopeSettings:
@@ -211,32 +281,159 @@ def _resolve_location(location_input, request: Request) -> dict:
     raise HTTPException(status_code=422, detail="Location is required")
 
 
-@app.post("/v1/chart")
-def chart(req: ChartRequest, request: Request) -> dict:
-    settings = req.settings or Settings()
-    timestamp_utc = _resolve_timestamp(req.metadata.timestamp_utc)
-    location = _resolve_location(req.metadata.location, request)
-
+def _resolve_chart_frame(frame: ChartRequest, request: Request, *, allow_derived: bool = False) -> tuple[dict, str, dict, Settings]:
+    if not allow_derived and frame.metadata.chart_type not in {"natal", "moment"}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported frame chart_type for this endpoint: {frame.metadata.chart_type}",
+        )
+    settings = frame.settings or Settings()
+    timestamp_utc = _resolve_timestamp(frame.metadata.timestamp_utc)
+    location = _resolve_location(frame.metadata.location, request)
     try:
         payload = calc_chart(
-            chart_type=req.metadata.chart_type,
+            chart_type=frame.metadata.chart_type,
             timestamp_utc=timestamp_utc,
             location=location,
             settings=settings,
+            round_output=False,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return payload, timestamp_utc, location, settings
 
-    name = req.metadata.name or (req.subject.name if req.subject else None)
-    base_meta = dict(payload["meta"])
-    base_meta.pop("name", None)
-    payload["meta"] = {"name": name, **base_meta}
-    return envelope_response(
-        request=request,
-        data=payload,
-        settings=_build_envelope_settings(settings),
-        input_summary=_build_input_summary(timestamp_utc, location),
+
+def _resolved_name(req: ChartRequest) -> str | None:
+    return (
+        req.metadata.name
+        or (req.subject.name if req.subject else None)
+        or (req.frame_a.metadata.name if req.frame_a else None)
+        or (req.frame_a.subject.name if req.frame_a and req.frame_a.subject else None)
     )
+
+
+@app.post("/v1/chart")
+def chart(req: ChartRequest, request: Request) -> dict:
+    chart_type = req.metadata.chart_type
+    name = _resolved_name(req)
+
+    if chart_type in {"natal", "moment"}:
+        settings = req.settings or Settings()
+        timestamp_utc = _resolve_timestamp(req.metadata.timestamp_utc)
+        location = _resolve_location(req.metadata.location, request)
+        try:
+            payload = calc_chart(
+                chart_type=chart_type,
+                timestamp_utc=timestamp_utc,
+                location=location,
+                settings=settings,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        base_meta = dict(payload["meta"])
+        base_meta.pop("name", None)
+        payload["meta"] = {"name": name, **base_meta}
+        return envelope_response(
+            request=request,
+            data=payload,
+            settings=_build_envelope_settings(settings),
+            input_summary=_build_input_summary(timestamp_utc, location),
+        )
+
+    if chart_type == "solar_arc":
+        if req.frame_a is None:
+            raise HTTPException(status_code=422, detail="frame_a is required for chart_type=solar_arc")
+        if req.frame_a.metadata.chart_type != "natal":
+            raise HTTPException(status_code=422, detail="frame_a.chart_type must be natal for chart_type=solar_arc")
+
+        frame_a_chart, _, _, frame_a_settings = _resolve_chart_frame(req.frame_a, request)
+        target_settings = req.settings or frame_a_settings
+        target_timestamp_utc = _resolve_timestamp(req.metadata.timestamp_utc)
+        target_location = _resolve_location(req.metadata.location or req.frame_a.metadata.location, request)
+
+        try:
+            frame_b_chart = calc_chart(
+                chart_type="moment",
+                timestamp_utc=target_timestamp_utc,
+                location=target_location,
+                settings=target_settings,
+                round_output=False,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        sun_mode = req.metadata.solar_arc_sun or "mean"
+        sun_key = "sun"
+        if sun_mode == "true":
+            sun_key = "sun_true"
+            if "sun_true" not in frame_a_chart["bodies"]:
+                frame_a_chart["bodies"]["sun_true"] = frame_a_chart["bodies"]["sun"]
+            if "sun_true" not in frame_b_chart["bodies"]:
+                frame_b_chart["bodies"]["sun_true"] = frame_b_chart["bodies"]["sun"]
+        arc = _normalize_deg(frame_b_chart["bodies"][sun_key]["lon"] - frame_a_chart["bodies"][sun_key]["lon"])
+
+        payload = _build_solar_arc_chart_payload(frame_a_chart, frame_b_chart, arc, sun_mode)
+        payload = round_payload(payload, 2)
+        base_meta = dict(payload["meta"])
+        base_meta.pop("name", None)
+        payload["meta"] = {"name": name, **base_meta}
+        return envelope_response(
+            request=request,
+            data=payload,
+            settings=_build_envelope_settings(target_settings),
+            input_summary=_build_input_summary(target_timestamp_utc, target_location),
+        )
+
+    if chart_type == "secondary_progression":
+        if req.frame_a is None:
+            raise HTTPException(status_code=422, detail="frame_a is required for chart_type=secondary_progression")
+        if req.frame_a.metadata.chart_type != "natal":
+            raise HTTPException(
+                status_code=422,
+                detail="frame_a.chart_type must be natal for chart_type=secondary_progression",
+            )
+
+        frame_a_chart, frame_a_timestamp_utc, frame_a_location, frame_a_settings = _resolve_chart_frame(req.frame_a, request)
+        target_settings = req.settings or frame_a_settings
+        target_timestamp_utc = _resolve_timestamp(req.metadata.timestamp_utc)
+        target_location = _resolve_location(req.metadata.location or req.frame_a.metadata.location, request)
+
+        natal_dt = _parse_timestamp(frame_a_timestamp_utc)
+        target_dt = _parse_timestamp(target_timestamp_utc)
+        delta_years = (target_dt - natal_dt).total_seconds() / (365.25 * 86400.0)
+        progressed_dt = natal_dt + timedelta(days=delta_years)
+        progressed_ts = progressed_dt.isoformat()
+
+        try:
+            payload = calc_chart(
+                chart_type="natal",
+                timestamp_utc=progressed_ts,
+                location=frame_a_chart["meta"]["location"],
+                settings=target_settings,
+                round_output=False,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        meta = dict(payload.get("meta", {}))
+        meta["output_type"] = "secondary_progression"
+        meta["mode"] = "chart"
+        meta["chart_type"] = "secondary_progression"
+        meta["source_timestamp_utc"] = frame_a_timestamp_utc
+        meta["target_timestamp_utc"] = target_timestamp_utc
+        payload["meta"] = meta
+        payload = round_payload(payload, 2)
+        base_meta = dict(payload["meta"])
+        base_meta.pop("name", None)
+        payload["meta"] = {"name": name, **base_meta}
+        return envelope_response(
+            request=request,
+            data=payload,
+            settings=_build_envelope_settings(target_settings),
+            input_summary=_build_input_summary(target_timestamp_utc, target_location or frame_a_location),
+        )
+
+    raise HTTPException(status_code=422, detail=f"Unsupported chart_type: {chart_type}")
 
 
 def _label_from_frame(frame: ChartRequest) -> str:
@@ -287,16 +484,8 @@ def transit(req: TransitRequest, request: Request) -> dict:
     frame_b_req = req.frame_b
 
     def _resolve_frame(frame: ChartRequest) -> dict:
-        settings = frame.settings or Settings()
-        timestamp_utc = _resolve_timestamp(frame.metadata.timestamp_utc)
-        location = _resolve_location(frame.metadata.location, request)
-        return calc_chart(
-            chart_type=frame.metadata.chart_type,
-            timestamp_utc=timestamp_utc,
-            location=location,
-            settings=settings,
-            round_output=False,
-        )
+        payload, _, _, _ = _resolve_chart_frame(frame, request)
+        return payload
 
     if transit_type == "astrocartography":
         try:
@@ -342,6 +531,11 @@ def transit(req: TransitRequest, request: Request) -> dict:
             )
 
     if transit_type == "solar_arc":
+        if req.metadata.output and req.metadata.output != "aspects":
+            raise HTTPException(
+                status_code=422,
+                detail="solar_arc chart output moved to /v1/chart with chart_type=solar_arc",
+            )
         try:
             frame_a_chart = _resolve_frame(frame_a_req)
             frame_b_chart = _resolve_frame(frame_b_req)
@@ -359,9 +553,7 @@ def transit(req: TransitRequest, request: Request) -> dict:
 
         arc = _normalize_deg(frame_b_chart["bodies"][sun_key]["lon"] - frame_a_chart["bodies"][sun_key]["lon"])
 
-        arc_bodies = {}
-        for name, body in frame_a_chart["bodies"].items():
-            arc_bodies[name] = {**body, "lon": _normalize_deg(body["lon"] + arc)}
+        arc_bodies = {name: {**body, "lon": _normalize_deg(body["lon"] + arc)} for name, body in frame_a_chart["bodies"].items()}
 
         aspect_set, aspect_angles, aspect_orbs, aspect_classes = _default_aspect_config()
         targets_a = [(name, arc_bodies[name]) for name in arc_bodies.keys()]
@@ -379,6 +571,7 @@ def transit(req: TransitRequest, request: Request) -> dict:
         payload = {
             "meta": {
                 "transit_type": transit_type,
+                "mode": "aspects",
                 "timestamp_utc": frame_b_chart["meta"]["timestamp_utc"],
                 "solar_arc_sun": sun_mode,
             },
@@ -388,6 +581,11 @@ def transit(req: TransitRequest, request: Request) -> dict:
         return _wrap(payload, frame_b_chart["meta"]["timestamp_utc"], frame_b_chart["meta"]["location"], frame_b_req.settings)
 
     if transit_type == "secondary_progression":
+        if req.metadata.output and req.metadata.output != "aspects":
+            raise HTTPException(
+                status_code=422,
+                detail="secondary_progression chart output moved to /v1/chart with chart_type=secondary_progression",
+            )
         try:
             frame_a_chart = _resolve_frame(frame_a_req)
             frame_b_chart = _resolve_frame(frame_b_req)
@@ -411,17 +609,6 @@ def transit(req: TransitRequest, request: Request) -> dict:
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        if req.metadata.output == "chart":
-            meta = progressed_chart.get("meta", {})
-            meta["output_type"] = "secondary_progression"
-            meta["mode"] = "chart"
-            meta["chart_type"] = "secondary_progression"
-            meta["transit_type"] = transit_type
-            meta["target_timestamp_utc"] = frame_b_chart["meta"]["timestamp_utc"]
-            progressed_chart["meta"] = meta
-            payload = round_payload(progressed_chart, 2)
-            return _wrap(payload, frame_b_chart["meta"]["timestamp_utc"], frame_b_chart["meta"]["location"], frame_b_req.settings)
-
         aspect_set, aspect_angles, aspect_orbs, aspect_classes = _default_aspect_config()
         targets_a = _build_aspect_targets(progressed_chart)
         targets_b = _build_aspect_targets(frame_a_chart)
@@ -438,6 +625,7 @@ def transit(req: TransitRequest, request: Request) -> dict:
         payload = {
             "meta": {
                 "transit_type": transit_type,
+                "mode": "aspects",
                 "timestamp_utc": frame_b_chart["meta"]["timestamp_utc"],
             },
             "aspects": aspects,

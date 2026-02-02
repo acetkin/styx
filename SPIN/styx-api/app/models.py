@@ -15,11 +15,15 @@ class LocationObj(BaseModel):
 LocationInput = Union[str, LocationObj]
 
 
+ChartType = Literal["natal", "moment", "solar_arc", "secondary_progression"]
+
+
 class Metadata(BaseModel):
-    chart_type: Literal["natal", "moment"]
+    chart_type: ChartType
     timestamp_utc: Optional[str] = None
     location: Optional[LocationInput] = None
     name: Optional[str] = None
+    solar_arc_sun: Optional[Literal["mean", "true"]] = None
 
 
 class PointsSettings(BaseModel):
@@ -41,6 +45,7 @@ class ChartRequest(BaseModel):
     metadata: Metadata
     subject: Optional[Subject] = None
     settings: Optional[Settings] = None
+    frame_a: Optional["ChartRequest"] = None
 
 
 TransitType = Literal[
@@ -120,3 +125,6 @@ class ProgressionTimelineRequest(BaseModel):
     metadata: ProgressionTimelineMetadata
     natal: ChartRequest
     settings: Optional[Settings] = None
+
+
+ChartRequest.model_rebuild()
