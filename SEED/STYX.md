@@ -4,44 +4,43 @@ name: STYX
 output_family: Code
 
 ## One-Sentence Description
-Deterministic astrology computation core and API that returns structured, reproducible data without interpretive prose.
+Deterministic astrology computation API built on Swiss Ephemeris with stable envelope responses and unified timelines.
 
 ## Goals
-- Provide stable envelope responses with deterministic chart/transit/timeline outputs and full provenance.
-- Keep the API surface minimal while supporting core modes via /v1/transit and range outputs via /v1/timeline and /v1/progression_timeline.
-- Ship data-only astrocartography and lunations/eclipses workflows without rendering.
+- Provide stable envelope responses with deterministic chart/transit/timeline outputs.
+- Support single-chart generation (natal, moment, solar_arc, secondary_progression) and two-frame transit aspects.
+- Provide unified /v1/timeline for transit, secondary_progression, and solar_arc with adaptive scanning and lunations/eclipses tokens.
 - Maintain runnable tests and smoke-run samples for validation.
 
 ## Non-Goals
 - Generating interpretive prose or horoscope text.
-- Rendering maps or visuals (astrocartography is data-only).
-- Computing eclipses in the API runtime (use lunations CSV).
-- Persisting user data or profiles.
+- Rendering maps or visuals (no astrocartography).
+- Relationship modes beyond transit (no on_natal or synastry).
+- Separate progression_timeline endpoint.
+- Computing eclipses at runtime beyond the CSV dataset.
 
 ## Deliverables
 - GET /v1/health (envelope).
 - GET /v1/config with defaults, catalogs, orbs, and provenance.
-- POST /v1/chart with planets Sun..Pluto, asteroids Ceres/Pallas/Juno/Vesta/Chiron, angles/houses, nodes, lots, lilith, aspects, fixed-star conjunctions.
-- POST /v1/transit modes: transit, on_natal, synastry, solar_arc (mean/true sun), secondary_progression (aspects or chart), astrocartography (results + crossings), lunations filter.
-- POST /v1/timeline for level1/level2 (transit events) and level3/lunations/eclipses (CSV-backed events).
-- POST /v1/progression_timeline for range-based progression events (outer planets excluded).
-- Data files under SPIN/styx-api/data: cities5000.txt, countryInfo.txt, lunations_100y.csv.
+- POST /v1/chart with chart_type: natal, moment, solar_arc, secondary_progression.
+- POST /v1/transit with transit_type: transit (two-frame cross-aspects).
+- POST /v1/timeline with timeline_type: transit, secondary_progression, solar_arc; bodies list and lunations/eclipses tokens.
+- Data files under SPIN/styx-api/data: lunations_100y.csv.
 - Tests: pytest -q; smoke-run script writes samples to SPIN/_logs.
 
 ## Constraints
 - Runtime: Python 3.12 target, FastAPI, Uvicorn.
 - Swiss Ephemeris is the single source of astronomical truth; path via SE_EPHE_PATH.
-- Geocoding required for place strings; supports GeoIP via "auto/ip" and stubs for tests.
-- Inputs normalized to UTC internally; timestamp accepts ISO-8601 with offset.
+- Inputs normalized to UTC internally; timestamp accepts ISO-8601.
+- Location is an object {lat, lon, alt_m, place} where required.
 - Deterministic ordering and rounding to 2 decimals for chart/transit payloads.
-- Bundled datasets for astrocartography and lunations are required.
+- Legacy fields are removed (metadata.name, subject, settings.points.lilith, metadata.output/level/body/step_years, transit_type on_natal/synastry/astrocartography/solar_arc/secondary_progression).
 
 ## Acceptance Criteria
 - Same request yields identical response (ordering + rounding) across runs.
 - All endpoints return the envelope shape with stable schema fields.
-- /v1/config catalogs match implemented lists and default settings.
-- /v1/transit returns aspects for relationship modes and data-only outputs for astrocartography/lunations.
-- /v1/timeline and /v1/progression_timeline return events with phases across a requested range.
+- /v1/transit returns cross-aspects for transit only.
+- /v1/timeline supports transit/secondary_progression/solar_arc with adaptive scanning and lunations/eclipses tokens.
 - pytest -q passes locally; smoke run produces envelope-valid samples.
 
 ## API Surface (Accepted Decisions)
@@ -51,62 +50,50 @@ Deterministic astrology computation core and API that returns structured, reprod
   - POST /v1/chart
   - POST /v1/transit
   - POST /v1/timeline
-  - POST /v1/progression_timeline
-- request model (chart/transit):
-  - body: { metadata, subject?, settings? }
-  - metadata.timestamp_utc: ISO-8601; may include offset; "now" supported where optional
-  - metadata.location: string place | object {lat, lon, alt_m?, place?} | "auto"/"ip" (GeoIP)
-  - settings defaults: house_system=placidus, zodiac=tropical, coordinate_system=ecliptic
-  - settings.points.lilith: mean | true (mean default)
-- request model (timeline/progression):
-  - start_utc/end_utc required; level selects bodies or lunations
-  - progression_timeline supports step_years
+- chart request:
+  - metadata.chart_type: natal | moment | solar_arc | secondary_progression
+  - metadata.timestamp_utc: ISO-8601
+  - metadata.location: {lat, lon, alt_m?, place?}
+  - metadata.client_name: optional label
+  - metadata.solar_arc_sun: mean | true (only for solar_arc)
+  - settings: {house_system, zodiac, coordinate_system}
+- transit request:
+  - metadata.transit_type: transit
+  - metadata.timestamp_utc: ISO-8601
+  - metadata.location: {lat, lon, alt_m?, place?}
+  - frame_a: ChartFrameRequest (natal or moment)
+  - frame_b: ChartFrameRequest (natal or moment)
+- timeline request:
+  - metadata.start_utc / end_utc: required
+  - metadata.timeline_type: transit | secondary_progression | solar_arc
+  - metadata.bodies: required for transit/solar_arc
+  - bodies allowed: uranus, neptune, pluto, jupiter, saturn, nn, sn, nodes
+  - lunations/eclipses tokens (transit timeline): lunations, eclipses, new_moon, full_moon, solar_eclipse, lunar_eclipse
 
 ## Response Contents (v1 Catalog)
 Top-level envelope: { meta, settings, input_summary, data, timing, errors }
 
-- meta:
-  - schema_version, engine_version
-  - request_id, created_at_utc
-  - ephemeris { provider, version?, flags? }
-- settings: resolved zodiac/house_system/coordinates/orbs
-- input_summary: datetime_local/timezone/datetime_utc/location
-- data: payload specific to endpoint
-- timing: latency_ms, compute_ms, cache?
-- errors: [] on success
-
 Chart data payload (data):
-- meta: output_type, mode, chart_type, timestamp_utc, timestamp_local?, timezone?, location, warnings?
-- bodies: planets Sun..Pluto
-- asteroids: Ceres/Pallas/Juno/Vesta/Chiron + Lilith asteroid entries
-- angles: asc/dsc/mc/ic
-- houses: system + cusps
-- points: nn/sn, lots, lilith (black moon)
-- aspects: list of {a,b,type,exact_angle,orb,applying,separating}
-- stars: conjunctions with fixed stars
+- meta: output_type, mode, chart_type, timestamp_utc, location, client_name?
+- bodies, asteroids, angles, houses, points, aspects, stars (deterministic ordering)
 
 Transit data payload (data):
-- meta: transit_type, timestamp_utc, optional solar_arc_sun
-- aspects: cross-aspects between frames for relationship modes
-- results/crossings for astrocartography
-- events for lunations filter
+- meta: transit_type, timestamp_utc
+- aspects: cross-aspects between frame_a and frame_b
 
 Timeline data payload (data):
-- meta: start_utc, end_utc, level
+- meta: start_utc, end_utc, timeline_type, bodies
 - events: transit/natal/aspect with phases (approaching/exact/separating)
 
-Progression timeline data payload (data):
-- meta: start_utc, end_utc, step_years
-- events: progression aspects with phases, outer planets excluded
-
 ## Canonical JSON Examples
-### Request (place string + offset)
+### Chart (natal)
 ```json
 {
   "metadata": {
     "chart_type": "natal",
-    "timestamp_utc": "1982-05-08T06:39:00+03:00",
-    "location": "Karadeniz Eregli"
+    "timestamp_utc": "1982-05-08T06:39:00Z",
+    "location": { "lat": 41.2796, "lon": 31.4230, "alt_m": 0, "place": "Karadeniz Eregli" },
+    "client_name": "Client A"
   },
   "settings": {
     "house_system": "placidus",
@@ -116,31 +103,72 @@ Progression timeline data payload (data):
 }
 ```
 
-### Response (envelope + chart excerpt)
+### Transit (two-frame)
 ```json
 {
-  "meta": { "schema_version": "1.0", "engine_version": "0.1.0", "request_id": "...", "created_at_utc": "..." },
-  "settings": { "house_system": "placidus", "zodiac": { "type": "tropical" } },
-  "input_summary": { "datetime_utc": "1982-05-08T03:39:00Z" },
-  "data": {
-    "meta": { "output_type": "natal", "mode": "chart", "chart_type": "natal", "timestamp_utc": "1982-05-08T03:39:00Z" },
-    "bodies": { "sun": { "lon": 0.0, "lat": 0.0, "speed": 0.0, "retrograde": false, "sign": "Aries", "deg_in_sign": 0.0, "house": 1 } },
-    "angles": { "asc": { "lon": 0.0, "sign": "Aries", "deg_in_sign": 0.0 } },
-    "houses": { "system": "placidus", "cusps": { "1": { "lon": 0.0, "sign": "Aries", "deg_in_sign": 0.0 } } },
-    "points": { "nn": { "lon": 0.0, "lat": 0.0 } },
-    "aspects": [],
-    "stars": []
+  "metadata": {
+    "transit_type": "transit",
+    "timestamp_utc": "2024-03-10T08:15:00Z",
+    "location": { "lat": 41.01, "lon": 28.97, "alt_m": 5, "place": "Istanbul" }
   },
-  "timing": { "latency_ms": 0.0, "compute_ms": 0.0, "cache": { "hit": false } },
-  "errors": []
+  "frame_a": {
+    "metadata": {
+      "chart_type": "natal",
+      "timestamp_utc": "1990-01-01T12:00:00Z",
+      "location": { "lat": 41.01, "lon": 28.97, "alt_m": 5, "place": "Istanbul" },
+      "client_name": "Client A"
+    },
+    "settings": {
+      "house_system": "placidus",
+      "zodiac": "tropical",
+      "coordinate_system": "ecliptic"
+    }
+  },
+  "frame_b": {
+    "metadata": {
+      "chart_type": "moment",
+      "timestamp_utc": "2024-03-10T08:15:00Z",
+      "location": { "lat": 41.01, "lon": 28.97, "alt_m": 5, "place": "Istanbul" },
+      "client_name": "Client A"
+    },
+    "settings": {
+      "house_system": "placidus",
+      "zodiac": "tropical",
+      "coordinate_system": "ecliptic"
+    }
+  }
+}
+```
+
+### Timeline (solar_arc)
+```json
+{
+  "metadata": {
+    "start_utc": "2024-01-01T00:00:00Z",
+    "end_utc": "2026-01-01T00:00:00Z",
+    "timeline_type": "solar_arc",
+    "bodies": ["sun", "moon", "mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune", "pluto", "nn", "sn"]
+  },
+  "frame_a": {
+    "metadata": {
+      "chart_type": "natal",
+      "timestamp_utc": "1990-01-01T12:00:00Z",
+      "location": { "lat": 41.01, "lon": 28.97, "alt_m": 5, "place": "Istanbul" },
+      "client_name": "Client A"
+    },
+    "settings": {
+      "house_system": "placidus",
+      "zodiac": "tropical",
+      "coordinate_system": "ecliptic"
+    }
+  }
 }
 ```
 
 ## Operational Rules (Accepted)
 - Determinism: same input -> same output, including ordering and rounding.
-- Geocoding is always on; "auto/ip" uses GeoIP; failures return HTTP 422.
+- Legacy fields are rejected; only current request shapes are accepted.
 - Missing ephemeris data or path returns HTTP 500.
-- Fixed-star calc failures are recorded in data.meta.warnings when applicable.
 
 ## Stage & Plan Context (Accepted)
 - Stage: S3 (Release / Stable); Next: NONE.
@@ -151,17 +179,14 @@ Progression timeline data payload (data):
 ## Suggested SPIN Output
 deliverable_folder_name: styx-api
 
-
-
 ## C Output Types and Timelines (from SPEC/Develop/B_Develop.md)
 
 ### 1 Direct Output Types
-- Direct outputs: /v1/chart (natal/moment), /v1/transit (transit/on_natal/synastry/solar_arc/secondary_progression/astrocartography), all wrapped in the envelope.
-- Astrocartography is data-only: nearest cities/places per line with crossings (no rendered maps).
+- /v1/chart (natal/moment/solar_arc/secondary_progression), /v1/transit (transit only), all wrapped in the envelope.
 
 ### 2 Calculated Output Types
-- /v1/timeline: level1 (outer planets), level2 (Saturn + Jupiter), level3/lunations/eclipses from lunations CSV.
-- /v1/progression_timeline: range-based progression events with phases and exact_index; outer planets excluded.
+- /v1/timeline: transit, secondary_progression, solar_arc.
+- Lunations/eclipses exposed via bodies tokens in transit timeline.
 
 ### 3 Output JSON Formats
 - Envelope always wraps the data payload; examples in Canonical JSON Examples above.

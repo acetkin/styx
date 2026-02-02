@@ -107,13 +107,12 @@ def main() -> int:
                 "chart_type": "natal",
                 "timestamp_utc": "2024-01-01T00:00:00Z",
                 "location": base_location,
-                "name": "Test",
+                "client_name": "Test",
             },
             "settings": {
                 "house_system": "placidus",
                 "zodiac": "tropical",
                 "coordinate_system": "ecliptic",
-                "points": {"lilith": "mean"},
             },
         }
 
@@ -153,9 +152,9 @@ def main() -> int:
             "metadata": {
                 "start_utc": "2024-01-01T00:00:00Z",
                 "end_utc": "2024-02-01T00:00:00Z",
-                "level": "level1",
+                "bodies": ["uranus", "neptune", "pluto"],
             },
-            "natal": {
+            "frame_a": {
                 "metadata": {
                     "chart_type": "natal",
                     "timestamp_utc": "2000-01-01T00:00:00Z",
@@ -173,9 +172,9 @@ def main() -> int:
             "metadata": {
                 "start_utc": "2024-01-01T00:00:00Z",
                 "end_utc": "2024-02-01T00:00:00Z",
-                "step_years": 1,
+                "timeline_type": "secondary_progression",
             },
-            "natal": {
+            "frame_a": {
                 "metadata": {
                     "chart_type": "natal",
                     "timestamp_utc": "2000-01-01T00:00:00Z",
@@ -195,7 +194,7 @@ def main() -> int:
             ("chart", "POST", "/v1/chart", chart_req),
             ("transit", "POST", "/v1/transit", transit_req),
             ("timeline", "POST", "/v1/timeline", timeline_req),
-            ("progression_timeline", "POST", "/v1/progression_timeline", progression_req),
+            ("progression_timeline", "POST", "/v1/timeline", progression_req),
         ]
 
         failures: list[str] = []
@@ -233,4 +232,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

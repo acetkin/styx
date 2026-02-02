@@ -102,14 +102,13 @@ write_json("transit", "secondary_progression.json", resp.json())
 # secondary progression chart only
 sp_chart_payload = {
     "metadata": {
-        "transit_type": "secondary_progression",
+        "chart_type": "secondary_progression",
         "timestamp_utc": "2026-01-28T10:00:00+03:00",
-        "output": "chart",
         "location": "Karadeniz Eregli",
     },
     "frame_a": natal_payload,
 }
-ms, resp = measure("POST", "/v1/transit", json=sp_chart_payload)
+ms, resp = measure("POST", "/v1/chart", json=sp_chart_payload)
 latency["secondary_progression_chart_ms"] = ms
 write_json("transit", "secondary_progression_chart.json", resp.json())
 
@@ -136,9 +135,9 @@ level1_payload = {
     "metadata": {
         "start_utc": "2026-01-01T00:00:00Z",
         "end_utc": "2031-01-01T00:00:00Z",
-        "level": "level1",
+        "bodies": ["uranus", "neptune", "pluto"],
     },
-    "natal": natal_payload,
+    "frame_a": natal_payload,
 }
 ms, resp = measure("POST", "/v1/timeline", json=level1_payload)
 latency["timeline_level1_ms"] = ms
@@ -148,9 +147,9 @@ level2_payload = {
     "metadata": {
         "start_utc": "2026-01-01T00:00:00Z",
         "end_utc": "2031-01-01T00:00:00Z",
-        "level": "level2",
+        "bodies": ["jupiter", "saturn"],
     },
-    "natal": natal_payload,
+    "frame_a": natal_payload,
 }
 ms, resp = measure("POST", "/v1/timeline", json=level2_payload)
 latency["timeline_level2_ms"] = ms
@@ -160,9 +159,9 @@ level3_payload = {
     "metadata": {
         "start_utc": "2026-01-01T00:00:00Z",
         "end_utc": "2026-12-31T23:59:59Z",
-        "level": "eclipses",
+        "bodies": ["eclipses"],
     },
-    "natal": natal_payload,
+    "frame_a": natal_payload,
 }
 ms, resp = measure("POST", "/v1/timeline", json=level3_payload)
 latency["timeline_level3_ms"] = ms
@@ -173,11 +172,11 @@ prog_payload = {
     "metadata": {
         "start_utc": "1982-05-08T03:39:00Z",
         "end_utc": "1985-05-08T03:39:00Z",
-        "step_years": 1,
+        "timeline_type": "secondary_progression",
     },
-    "natal": natal_payload,
+    "frame_a": natal_payload,
 }
-ms, resp = measure("POST", "/v1/progression_timeline", json=prog_payload)
+ms, resp = measure("POST", "/v1/timeline", json=prog_payload)
 latency["progression_timeline_ms"] = ms
 write_json("progression_timeline", "response.json", resp.json())
 

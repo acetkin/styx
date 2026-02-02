@@ -24,14 +24,22 @@ natal_chart = calc_chart(
 start_utc = "1982-05-08T03:39:00Z"
 end_utc = "2082-05-08T03:39:00Z"
 
-for level in ("jupiter", "saturn", "outer", "nodes"):
+body_sets = {
+    "jupiter": ["jupiter"],
+    "saturn": ["saturn"],
+    "outer": ["uranus", "neptune", "pluto"],
+    "nodes": ["nn", "sn"],
+}
+
+for label, bodies in body_sets.items():
     payload = build_timeline(
         natal_chart=natal_chart,
         start_utc=start_utc,
         end_utc=end_utc,
-        level=level,
+        level="custom",
         house_system=settings.house_system,
+        bodies=bodies,
     )
-    out_path = OUT_DIR / f"timeline_{level}.json"
+    out_path = OUT_DIR / f"timeline_{label}.json"
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Wrote {out_path}")

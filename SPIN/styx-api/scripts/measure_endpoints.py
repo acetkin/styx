@@ -127,27 +127,27 @@ ms, resp = measure("POST", "/v1/transit", json=lun_payload)
 results["lunations_ms"] = ms
 results["lunations_status"] = resp.status_code
 
-# /v1/timeline (level1)
+# /v1/timeline (outer bodies)
 level1_payload = {
     "metadata": {
         "start_utc": "2026-01-01T00:00:00Z",
         "end_utc": "2027-01-01T00:00:00Z",
-        "level": "level1",
+        "bodies": ["uranus", "neptune", "pluto"],
     },
-    "natal": chart_payload,
+    "frame_a": chart_payload,
 }
 ms, resp = measure("POST", "/v1/timeline", json=level1_payload)
 results["timeline_level1_ms"] = ms
 results["timeline_level1_status"] = resp.status_code
 
-# /v1/timeline (level2)
+# /v1/timeline (jupiter/saturn)
 level2_payload = {
     "metadata": {
         "start_utc": "2026-01-01T00:00:00Z",
         "end_utc": "2027-01-01T00:00:00Z",
-        "level": "level2",
+        "bodies": ["jupiter", "saturn"],
     },
-    "natal": chart_payload,
+    "frame_a": chart_payload,
 }
 ms, resp = measure("POST", "/v1/timeline", json=level2_payload)
 results["timeline_level2_ms"] = ms
@@ -158,9 +158,9 @@ level3_payload = {
     "metadata": {
         "start_utc": "2026-01-01T00:00:00Z",
         "end_utc": "2026-12-31T23:59:59Z",
-        "level": "eclipses",
+        "bodies": ["eclipses"],
     },
-    "natal": chart_payload,
+    "frame_a": chart_payload,
 }
 ms, resp = measure("POST", "/v1/timeline", json=level3_payload)
 results["timeline_eclipses_ms"] = ms

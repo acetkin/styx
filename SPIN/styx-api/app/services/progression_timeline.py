@@ -22,18 +22,8 @@ OUTER_EXCLUDE = {"uranus", "neptune", "pluto"}
 ASPECT_ANGLES = [0.0, 60.0, 90.0, 120.0, 180.0]
 ASPECT_DEG = {0.0: "0", 60.0: "60", 90.0: "90", 120.0: "120", 180.0: "180"}
 
-STEP_DAYS = {
-    "moon": 1.0,
-    "sun": 3.0,
-    "mercury": 2.0,
-    "venus": 2.0,
-    "mars": 4.0,
-    "jupiter": 10.0,
-    "saturn": 15.0,
-    "angle": 5.0,
-}
-
 ANGLE_KEYS = ("asc", "dsc", "mc", "ic")
+STEP_SCHEDULE_DAYS = [30.0, 7.0, 1.0, 1.0 / 24.0, 1.0 / 1440.0]
 
 
 @dataclass(frozen=True)
@@ -173,34 +163,59 @@ def _find_root(func: Callable[[float], float], a: float, b: float, steps: int = 
     return (a + b) / 2.0
 
 
-def _find_orb_crossing(func: Callable[[float], float], a: float, b: float) -> float | None:
-    fa = func(a)
-    fb = func(b)
-    if fa == 0:
-        return a
-    if fb == 0:
-        return b
-    if fa * fb > 0:
-        return None
-    return _find_root(func, a, b)
+def _scan_brackets_ts(func: Callable[[float], float], start_ts: float, end_ts: float, step_seconds: float) -> list[tuple[float, float]]:
+    brackets: list[tuple[float, float]] = []
+    t = start_ts
+    prev = func(t)
+    while t < end_ts:
+        t_next = min(t + step_seconds, end_ts)
+        cur = func(t_next)
+        if prev == 0:
+            brackets.append((t, t))
+        elif prev * cur <= 0:
+            brackets.append((t, t_next))
+        prev = cur
+        t = t_next
+    return brackets
 
 
-def _time_range(start_dt: datetime, end_dt: datetime, step_days: float) -> List[datetime]:
-    points: List[datetime] = []
-    current = start_dt
-    while current <= end_dt:
-        points.append(current)
-        current += timedelta(days=step_days)
-    if points and points[-1] < end_dt:
-        points.append(end_dt)
-    return points
+def _adaptive_roots_ts(func: Callable[[float], float], start_ts: float, end_ts: float) -> list[float]:
+    brackets = [(start_ts, end_ts)]
+    for days in STEP_SCHEDULE_DAYS:
+        step_seconds = days * 86400.0
+        refined: list[tuple[float, float]] = []
+        for a, b in brackets:
+            refined.extend(_scan_brackets_ts(func, a, b, step_seconds))
+        brackets = refined
+        if not brackets:
+            return []
+    roots: list[float] = []
+    for a, b in brackets:
+        roots.append(_find_root(func, a, b))
+    return sorted({round(r, 6) for r in roots})
+
+
+def _adaptive_crossing_ts(func: Callable[[float], float], start_ts: float, end_ts: float, forward: bool) -> float | None:
+    if start_ts == end_ts:
+        return start_ts
+    brackets = [(start_ts, end_ts)]
+    for days in STEP_SCHEDULE_DAYS:
+        step_seconds = days * 86400.0
+        refined: list[tuple[float, float]] = []
+        for a, b in brackets:
+            refined.extend(_scan_brackets_ts(func, a, b, step_seconds))
+        if refined:
+            brackets = refined
+        if not brackets:
+            return None
+    chosen = brackets[0] if forward else brackets[-1]
+    return _find_root(func, chosen[0], chosen[1])
 
 
 def build_progression_timeline(
     natal_chart: dict,
     start_utc: str,
     end_utc: str,
-    step_years: int,
 ) -> dict:
     _ensure_ephe_path()
     natal_dt = _parse_timestamp(natal_chart["meta"]["timestamp_utc"])
@@ -218,8 +233,6 @@ def build_progression_timeline(
     events: List[dict] = []
 
     for prog_body in progressed_bodies + progressed_angles:
-        base_step = STEP_DAYS.get(prog_body, STEP_DAYS["angle"] if prog_body in ANGLE_KEYS else 5.0)
-        step_days = base_step * max(step_years, 1)
         orb = TRANSIT_ORB_TABLE.get(prog_body, PROGRESSION_ORB_DEFAULT)
 
         def lon_at(target_dt: datetime) -> Tuple[float, str | None, dict]:
@@ -227,7 +240,8 @@ def build_progression_timeline(
             info = _progressed_body_info(jd, prog_body, location, house_system)
             return info["lon"], info.get("station"), info
 
-        times = _time_range(start_dt, end_dt, step_days)
+        start_ts = start_dt.timestamp()
+        end_ts = end_dt.timestamp()
 
         for target_name, target in targets:
             target_lon = target["lon"]
@@ -240,51 +254,41 @@ def build_progression_timeline(
                 transit_start = None
                 transit_end = None
 
-                def delta_func(dt: datetime) -> float:
+                def delta_at(ts: float) -> float:
+                    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
                     lon, _, _ = lon_at(dt)
                     return _aspect_delta(lon, target_lon, angle)
 
-                for i in range(len(times) - 1):
-                    t0 = times[i]
-                    t1 = times[i + 1]
-                    d0 = delta_func(t0)
-                    d1 = delta_func(t1)
-                    if d0 == 0 or d1 == 0 or d0 * d1 <= 0:
-                        exact_index += 1
+                def orb_func(ts: float) -> float:
+                    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                    lon, _, _ = lon_at(dt)
+                    return abs(_aspect_delta(lon, target_lon, angle)) - orb
 
-                        def delta_at(ts: float) -> float:
-                            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-                            return delta_func(dt)
+                exact_ts_list = _adaptive_roots_ts(delta_at, start_ts, end_ts)
+                for exact_ts in exact_ts_list:
+                    exact_index += 1
 
-                        exact_ts = _find_root(delta_at, t0.timestamp(), t1.timestamp())
-                        exact_dt = datetime.fromtimestamp(exact_ts, tz=timezone.utc)
+                    entry_ts = _adaptive_crossing_ts(orb_func, start_ts, exact_ts, forward=False) or start_ts
+                    exit_ts = _adaptive_crossing_ts(orb_func, exact_ts, end_ts, forward=True) or end_ts
 
-                        def orb_func(ts: float) -> float:
-                            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-                            lon, _, _ = lon_at(dt)
-                            return abs(_aspect_delta(lon, target_lon, angle)) - orb
+                    for phase_name, ts in (
+                        ("approaching", entry_ts),
+                        ("exact", exact_ts),
+                        ("separating", exit_ts),
+                    ):
+                        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                        _, station, _ = lon_at(dt)
+                        payload = {
+                            "exact_index": exact_index,
+                            "phase": phase_name,
+                            "timestamp_utc": dt.isoformat().replace("+00:00", "Z"),
+                        }
+                        if station:
+                            payload["transit_station"] = station
+                        phases.append(payload)
 
-                        entry_ts = _find_orb_crossing(orb_func, t0.timestamp(), exact_ts) or t0.timestamp()
-                        exit_ts = _find_orb_crossing(orb_func, exact_ts, t1.timestamp()) or t1.timestamp()
-
-                        for phase_name, ts in (
-                            ("approaching", entry_ts),
-                            ("exact", exact_ts),
-                            ("separating", exit_ts),
-                        ):
-                            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-                            _, station, _ = lon_at(dt)
-                            payload = {
-                                "exact_index": exact_index,
-                                "phase": phase_name,
-                                "timestamp_utc": dt.isoformat().replace("+00:00", "Z"),
-                            }
-                            if station:
-                                payload["transit_station"] = station
-                            phases.append(payload)
-
-                        transit_start = entry_ts if transit_start is None else min(transit_start, entry_ts)
-                        transit_end = exit_ts if transit_end is None else max(transit_end, exit_ts)
+                    transit_start = entry_ts if transit_start is None else min(transit_start, entry_ts)
+                    transit_end = exit_ts if transit_end is None else max(transit_end, exit_ts)
 
                 if phases:
                     start_iso = datetime.fromtimestamp(transit_start, tz=timezone.utc).isoformat().replace("+00:00", "Z")
@@ -321,7 +325,6 @@ def build_progression_timeline(
         "meta": {
             "start_utc": start_dt.isoformat().replace("+00:00", "Z"),
             "end_utc": end_dt.isoformat().replace("+00:00", "Z"),
-            "step_years": step_years,
-        },
+    },
         "events": events,
     }
